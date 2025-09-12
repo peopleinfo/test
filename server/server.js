@@ -457,8 +457,8 @@ const gameState = {
   foods: [],
   deadPoints: [],
   maxFoods: 350,
-  worldWidth: 600, // Temporarily reduced from 1200 to force bot deaths
-  worldHeight: 400, // Temporarily reduced from 800 to force bot deaths
+  worldWidth: 1200,
+  worldHeight: 800,
 };
 
 // Initialize food
