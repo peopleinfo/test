@@ -457,8 +457,8 @@ const gameState = {
   foods: [],
   deadPoints: [],
   maxFoods: 350,
-  worldWidth: 1200,
-  worldHeight: 800,
+  worldWidth: 600, // Temporarily reduced from 1200 to force bot deaths
+  worldHeight: 400, // Temporarily reduced from 800 to force bot deaths
 };
 
 // Initialize food
@@ -793,6 +793,9 @@ if (isSmallSnake) {
           createdAt: timestamp,
           isScoreGenerated: true,
           originalScore: targetScore,
+          isDeadSnakeFood: true,
+          snakeSegmentSize: dp.radius || 10,
+          snakeColor: dp.color || "#ff0000",
         };
 
         newFoodItems.push(foodItem);
@@ -1474,6 +1477,9 @@ function isCollided(circle1, circle2) {
 function handleBotDeath(bot) {
   if (!bot.alive) return;
 
+  console.log('💀 BOT DEATH: Bot', bot.id, 'is dying at position:', bot.x, bot.y);
+  console.log('💀 BOT DEATH: Bot score:', bot.score, 'points length:', bot.points.length);
+
   bot.alive = false;
 
   // Calculate 80% of bot's score for food conversion (same as human players)
@@ -1481,12 +1487,26 @@ function handleBotDeath(bot) {
   const currentFoodCount = gameState.foods.length;
   const availableSlots = Math.max(0, gameState.maxFoods - currentFoodCount);
 
+  console.log('💀 BOT DEATH: Generating food - targetScore:', targetScoreValue, 'availableSlots:', availableSlots);
+
   // Use generateOptimalFoodDistribution for consistent food creation
   const newFoodItems = generateOptimalFoodDistribution(
     targetScoreValue,
     bot.points,
     availableSlots
   );
+
+  console.log('💀 BOT DEATH: Generated', newFoodItems.length, 'food items');
+  newFoodItems.forEach((food, index) => {
+    console.log(`💀 Food ${index}:`, {
+      x: food.x,
+      y: food.y,
+      type: food.type,
+      isDeadSnakeFood: food.isDeadSnakeFood,
+      snakeColor: food.snakeColor,
+      snakeSegmentSize: food.snakeSegmentSize
+    });
+  });
 
   // Add generated food items to game state
   gameState.foods.push(...newFoodItems);
@@ -2024,6 +2044,20 @@ function updateBots() {
   const humanPlayers = Array.from(gameState.players.values()).filter(
     (p) => !p.isBot && p.alive
   );
+  
+  const allBots = Array.from(gameState.players.values()).filter(p => p.isBot);
+  const aliveBots = allBots.filter(p => p.alive);
+  
+  // Debug bot status every 10 seconds
+  if (!updateBots.lastDebugTime || Date.now() - updateBots.lastDebugTime > 10000) {
+    console.log('🤖 BOT STATUS:', {
+      humanPlayers: humanPlayers.length,
+      totalBots: allBots.length,
+      aliveBots: aliveBots.length,
+      botIds: aliveBots.map(b => b.id)
+    });
+    updateBots.lastDebugTime = Date.now();
+  }
 
   // If no human players, don't update bots at all
   if (humanPlayers.length === 0) {
@@ -2590,6 +2624,24 @@ function updateBots() {
 
 // Initialize game
 initializeFoods();
+
+// TEMPORARY: Test function to force bot death and create dead snake food
+function testDeadSnakeFood() {
+  console.log('🧪 TESTING: Forcing bot death to test dead snake food animation');
+  const bots = Array.from(gameState.players.values()).filter(p => p.isBot && p.alive);
+  if (bots.length > 0) {
+    const testBot = bots[0];
+    console.log(`🧪 TESTING: Killing bot ${testBot.id} at position (${testBot.x}, ${testBot.y}) with score ${testBot.score}`);
+    handleBotDeath(testBot);
+  } else {
+    console.log('🧪 TESTING: No alive bots found to kill');
+  }
+}
+
+// TEMPORARY: Auto-trigger test after 10 seconds
+setTimeout(() => {
+  testDeadSnakeFood();
+}, 10000);
 // console.log(
 //   `🎮 Game initialized: ${gameState.foods.length} foods spawned in ${gameState.worldWidth}x${gameState.worldHeight} world`
 // );
@@ -2712,6 +2764,12 @@ io.on("connection", (socket) => {
     if (humanPlayers.length === 1) {
       // First human player
       spawnBots(5);
+      
+      // TEMPORARY: Test dead snake food immediately after spawning bots
+      setTimeout(() => {
+        console.log('🧪 TESTING: Triggering dead snake food test after player join');
+        testDeadSnakeFood();
+      }, 2000);
     }
 
     // Send initial game state to new player
