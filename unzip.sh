@@ -6,7 +6,7 @@
 echo "Starting extraction of worm-zone-main.zip..."
 
 # Check if the zip file exists
-if [ ! -f "worm-zone-main.zip" ]; then
+if [ ! -f "dist.zip" ]; then
     echo "Error: worm-zone-main.zip not found in the current directory"
     exit 1
 fi
