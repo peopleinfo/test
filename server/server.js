@@ -2,6 +2,12 @@ const express = require("express");
 const http = require("http");
 const socketIo = require("socket.io");
 
+// Import optimization agents
+const { SpatialPartitioningAgent } = require('./agents/SpatialPartitioningAgent');
+const RelevancyScoreAgent = require('./agents/RelevancyScoreAgent');
+const { PredictiveCullingAgent } = require('./agents/PredictiveCullingAgent');
+const { NetworkAdaptationAgent } = require('./agents/NetworkAdaptationAgent');
+
 const app = express();
 const server = http.createServer(app);
 const io = socketIo(server, {
@@ -83,12 +89,19 @@ io.use((socket, next) => {
   next(); // Always allow connection, but track auth status
 });
 
-// Check with client config too avoid not sync
-
 // Bot configuration
-const MAX_BOTS = 4;
+const MIN_PLAYERS_FOR_BATTLE = 9;
+const MAX_BOTS = MIN_PLAYERS_FOR_BATTLE;
 const POINT = 3; // Points awarded for eating food or dead points
 const FOOD_RADIUS = 5.5;
+
+// Client rendering - smooth visuals
+// const RENDER_FPS = 60; // 16ms
+// Network updates - optimized bandwidth  
+const RENDER_FPS = 15; // 15ms 
+// const RENDER_FPS = 20; // 50ms 
+// Game logic - consistent gameplay
+// const RENDER_FPS = 30; // 33ms
 
 // Bot management throttling
 let lastBotSpawnAttempt = 0;
@@ -461,6 +474,134 @@ const gameState = {
   worldHeight: 800,
 };
 
+// Initialize optimization agents
+const spatialAgent = new SpatialPartitioningAgent(gameState.worldWidth, gameState.worldHeight, 100);
+const relevancyAgent = new RelevancyScoreAgent();
+const predictiveAgent = new PredictiveCullingAgent();
+const networkAgent = new NetworkAdaptationAgent();
+
+// Client viewport tracking
+const clientViewports = new Map(); // playerId -> viewport bounds
+
+console.log('🚀 Network optimization agents initialized');
+console.log(`📊 Spatial partitioning: ${spatialAgent.getStats().gridWidth}x${spatialAgent.getStats().gridHeight} cells`);
+
+// Optimized game state broadcast with spatial culling and relevancy scoring
+function broadcastOptimizedGameState(targetPlayerId = null, eventType = 'gameUpdate') {
+  const currentTime = Date.now();
+  
+  // Get all connected players
+  const connectedPlayers = Array.from(gameState.players.values()).filter(p => p.alive);
+  
+  connectedPlayers.forEach(player => {
+    // Skip if targeting specific player and this isn't the target
+    if (targetPlayerId && player.id !== targetPlayerId) return;
+    
+    const viewport = clientViewports.get(player.id);
+    if (!viewport) {
+      // Fallback to full game state for players without viewport data
+      io.to(player.socketId).emit(eventType, {
+        players: connectedPlayers,
+        foods: gameState.foods,
+        deadPoints: gameState.deadPoints
+      });
+      return;
+    }
+    
+    // Use spatial partitioning to get relevant objects
+    const relevantPlayers = spatialAgent.getObjectsInViewport(
+      viewport.x, viewport.y, viewport.width, viewport.height, ['players']
+    );
+    
+    const relevantFoods = spatialAgent.getObjectsInViewport(
+      viewport.x, viewport.y, viewport.width, viewport.height, ['foods']
+    );
+    
+    const relevantDeadPoints = spatialAgent.getObjectsInViewport(
+      viewport.x, viewport.y, viewport.width, viewport.height, ['deadPoints']
+    );
+    
+    // Apply relevancy scoring with lower thresholds for better optimization
+    const scoredPlayers = relevancyAgent.scoreObjects(
+      relevantPlayers, viewport.playerX, viewport.playerY, 'players'
+    ).filter(obj => obj.score > 0.01); // Lower threshold for players
+    
+    const scoredFoods = relevancyAgent.scoreObjects(
+      relevantFoods, viewport.playerX, viewport.playerY, 'foods'
+    ).filter(obj => obj.score > 0.005); // Lower threshold for foods
+    
+    const scoredDeadPoints = relevancyAgent.scoreObjects(
+      relevantDeadPoints, viewport.playerX, viewport.playerY, 'deadPoints'
+    ).filter(obj => obj.score > 0.005); // Lower threshold for dead points
+    
+    // Get adaptive update frequency from network agent
+    const playerData = {
+      x: viewport.playerX,
+      y: viewport.playerY,
+      velocityX: player.velocityX || 0,
+      velocityY: player.velocityY || 0,
+      lastActionTime: player.lastActionTime || currentTime,
+      alive: player.alive
+    };
+    
+    const serverMetrics = {
+      playerCount: connectedPlayers.length,
+      objectCount: gameState.foods.length + gameState.deadPoints.length
+    };
+    
+    const allGameObjects = [...relevantPlayers, ...relevantFoods, ...relevantDeadPoints];
+    const updateFreq = networkAgent.getUpdateFrequency(player.id, playerData, allGameObjects, serverMetrics);
+    const shouldUpdate = (currentTime - (player.lastUpdate || 0)) >= updateFreq;
+    
+    if (shouldUpdate) {
+      // Send optimized game state
+      io.to(player.socketId).emit(eventType, {
+        players: scoredPlayers.map(obj => obj.object),
+        foods: scoredFoods.map(obj => obj.object),
+        deadPoints: scoredDeadPoints.map(obj => obj.object),
+        viewport: {
+          x: viewport.x,
+          y: viewport.y,
+          width: viewport.width,
+          height: viewport.height
+        }
+      });
+      
+      player.lastUpdate = currentTime;
+      
+      // Log optimization stats
+      const originalCount = connectedPlayers.length + gameState.foods.length + gameState.deadPoints.length;
+      const optimizedCount = scoredPlayers.length + scoredFoods.length + scoredDeadPoints.length;
+      const reduction = ((originalCount - optimizedCount) / originalCount * 100).toFixed(1);
+      
+      console.log(`🚀 Optimized update for ${player.id}: ${originalCount} → ${optimizedCount} objects (${reduction}% reduction)`);
+    }
+  });
+}
+
+// Update spatial partitioning with current game objects
+function updateSpatialPartitioning() {
+  // Clear existing spatial data
+  spatialAgent.clear();
+  
+  // Add all players to spatial grid
+  gameState.players.forEach(player => {
+    if (player.alive) {
+      spatialAgent.addObject(player.id, player.x, player.y, 'players', player);
+    }
+  });
+  
+  // Add all foods to spatial grid
+  gameState.foods.forEach(food => {
+    spatialAgent.addObject(food.id, food.x, food.y, 'foods', food);
+  });
+  
+  // Add all dead points to spatial grid
+  gameState.deadPoints.forEach(deadPoint => {
+    spatialAgent.addObject(deadPoint.id, deadPoint.x, deadPoint.y, 'deadPoints', deadPoint);
+  });
+}
+
 // Initialize food
 function initializeFoods() {
   gameState.foods = [];
@@ -493,7 +634,31 @@ function initializeFoods() {
   console.log(
     `🍎 Food initialization complete: ${gameState.foods.length} foods spawned`
   );
+  
+  // Update spatial partitioning after food initialization
+  updateSpatialPartitioning();
+  console.log(`🗂️ Spatial partitioning updated with ${gameState.foods.length} foods`);
 }
+
+// Start optimized game loop for spatial updates and broadcasts
+let gameLoopInterval;
+function startOptimizedGameLoop() {
+  if (gameLoopInterval) clearInterval(gameLoopInterval);
+  
+  gameLoopInterval = setInterval(() => {
+    // Broadcast optimized game state to all players
+    broadcastOptimizedGameState(null, 'gameUpdate');
+    
+    // Update predictive agent predictions
+    predictiveAgent.updatePredictions();
+    
+  }, 1000 / RENDER_FPS); 
+  
+  console.log('🎮 Optimized game loop started at 30 FPS');
+}
+
+// Start the optimized game loop
+startOptimizedGameLoop();
 
 function getRandomColor() {
   const colors = [
@@ -2772,7 +2937,10 @@ io.on("connection", (socket) => {
       }, 2000);
     }
 
-    // Send initial game state to new player
+    // Update spatial partitioning with new player
+    updateSpatialPartitioning();
+    
+    // Send initial game state to new player using optimized broadcast
     socket.emit("gameInit", {
       playerId: playerId,
       gameState: {
@@ -2783,6 +2951,11 @@ io.on("connection", (socket) => {
         worldHeight: gameState.worldHeight,
       },
     });
+    
+    // Start sending optimized updates to this player
+    setTimeout(() => {
+      broadcastOptimizedGameState(playerId, 'gameUpdate');
+    }, 1000); // Give client time to set up viewport tracking
 
     // Send initial leaderboard to new player
     const initialLeaderboard = generateLeaderboard();
@@ -2817,6 +2990,9 @@ io.on("connection", (socket) => {
       player.x = data.x;
       player.y = data.y;
       player.points = data.points;
+      
+      // Update spatial partitioning for moved player
+      spatialAgent.updateObject(player.id, player.x, player.y, player);
 
       // Check and remove spawn protection after 5 seconds
       const currentTime = Date.now();
@@ -2843,6 +3019,28 @@ io.on("connection", (socket) => {
         points: data.points,
         spawnProtection: hasSpawnProtection,
       });
+    }
+  });
+
+  // Handle viewport updates from client
+  socket.on("viewportUpdate", (data) => {
+    const { playerId, viewport } = data;
+    const player = gameState.players.get(playerId);
+    
+    if (player && player.alive && viewport) {
+      const { x, y, width, height, playerX, playerY } = viewport;
+      
+      // Store client viewport bounds
+      clientViewports.set(playerId, {
+        x, y, width, height,
+        playerX, playerY,
+        timestamp: Date.now()
+      });
+      
+      // Update predictive agent with player movement
+      predictiveAgent.updatePlayerMovement(playerId, playerX, playerY, Date.now());
+      
+      console.log(`🔍 Viewport updated for ${playerId}: (${x?.toFixed(1) || 'N/A'}, ${y?.toFixed(1) || 'N/A'}) ${width?.toFixed(1) || 'N/A'}x${height?.toFixed(1) || 'N/A'}`);
     }
   });
 
@@ -2885,6 +3083,9 @@ io.on("connection", (socket) => {
 
       // Score persistence now handled client-side
 
+      // Update spatial partitioning after food regeneration
+      spatialAgent.updateObject(food.id, food.x, food.y, food);
+      
       // Broadcast food regeneration to all players
       io.emit("foodRegenerated", food);
 
@@ -2957,7 +3158,9 @@ io.on("connection", (socket) => {
       // Remove only the valid (aged) dead points from game state
       // Sort indices in descending order to avoid index shifting issues
       validDeadPoints.sort((a, b) => b.index - a.index);
-      validDeadPoints.forEach(({ index }) => {
+      validDeadPoints.forEach(({ point, index }) => {
+        // Remove from spatial partitioning before removing from game state
+        spatialAgent.removeObject(point.id);
         gameState.deadPoints.splice(index, 1);
       });
 
@@ -3030,6 +3233,14 @@ io.on("connection", (socket) => {
 
     // Batch add foods to game state
     gameState.foods.push(...newFoodItems);
+    
+    // Update spatial partitioning with new food items
+    newFoodItems.forEach(food => {
+      spatialAgent.addObject(food, 'foods');
+    });
+    
+    // Remove dead player from spatial partitioning
+    spatialAgent.removeObject(player.id);
 
     const endTime = performance.now();
     console.log(
@@ -3120,6 +3331,9 @@ io.on("connection", (socket) => {
           }
 
           gameState.players.set(data.playerId, respawnedPlayer);
+          
+          // Add respawned player to spatial partitioning
+          spatialAgent.addObject(respawnedPlayer, 'players');
 
           console.log(
             `✅ DEBUG: Player ${data.playerId} successfully respawned with ${respawnedPlayer.points.length} body points`
@@ -3183,6 +3397,8 @@ io.on("connection", (socket) => {
     // Find and remove player (only human players, keep bots)
     const player = gameState.players.get(data.playerId);
     if (player && player.socketId === socket.id && !player.isBot) {
+      // Remove from spatial partitioning before deleting
+      spatialAgent.removeObject(player.id);
       gameState.players.delete(data.playerId);
       io.emit("playerDisconnected", data.playerId);
       socket.broadcast.emit("playerLeft", {
@@ -3213,6 +3429,11 @@ io.on("connection", (socket) => {
       }
     }
     if (disconnectedPlayerId) {
+      const player = gameState.players.get(disconnectedPlayerId);
+      if (player) {
+        // Remove from spatial partitioning before deleting
+        spatialAgent.removeObject(player.id);
+      }
       gameState.players.delete(disconnectedPlayerId);
       performanceMetrics.playerDisconnections++;
       updatePeakMetrics();
@@ -3486,26 +3707,26 @@ function generateFullLeaderboard() {
 }
 
 // Send periodic game state updates
-setInterval(() => {
-  const playerCount = gameState.players.size;
-  const leaderboard = generateLeaderboard();
+// setInterval(() => {
+//   const playerCount = gameState.players.size;
+//   const leaderboard = generateLeaderboard();
 
-  io.emit("gameStats", {
-    playerCount: playerCount,
-    foodCount: gameState.foods.length,
-    leaderboard: leaderboard,
-  });
-}, 5000);
+//   io.emit("gameStats", {
+//     playerCount: playerCount,
+//     foodCount: gameState.foods.length,
+//     leaderboard: leaderboard,
+//   });
+// }, 5000);
 
-// Send leaderboard updates more frequently
-setInterval(() => {
-  const leaderboard = generateLeaderboard();
-  const fullLeaderboard = generateFullLeaderboard();
-  io.emit("leaderboardUpdate", {
-    leaderboard: leaderboard,
-    fullLeaderboard: fullLeaderboard,
-  });
-}, 1000);
+// // Send leaderboard updates more frequently
+// setInterval(() => {
+//   const leaderboard = generateLeaderboard();
+//   const fullLeaderboard = generateFullLeaderboard();
+//   io.emit("leaderboardUpdate", {
+//     leaderboard: leaderboard,
+//     fullLeaderboard: fullLeaderboard,
+//   });
+// }, 300);
 
 // Health check endpoint for Docker
 app.get("/health", (req, res) => {
@@ -3518,9 +3739,20 @@ app.get("/health", (req, res) => {
     timestamp: new Date().toISOString(),
     uptime: Math.floor(uptime),
     memory: {
+      // Raw memory values in MB
       rss: Math.round(memUsage.rss / 1024 / 1024),
       heapUsed: Math.round(memUsage.heapUsed / 1024 / 1024),
       heapTotal: Math.round(memUsage.heapTotal / 1024 / 1024),
+      external: Math.round(memUsage.external / 1024 / 1024),
+      arrayBuffers: Math.round(memUsage.arrayBuffers / 1024 / 1024),
+      
+      // Formatted display values
+      totalUsage: `${Math.round((memUsage.rss + memUsage.external) / 1024 / 1024)}MB`,
+      heapUsagePercent: `${Math.round((memUsage.heapUsed / memUsage.heapTotal) * 100)}%`,
+      
+      // Memory efficiency metrics
+      bytesPerPlayer: Math.round(memUsage.heapUsed / (gameState.players.size || 1)),
+      gcEnabled: !!global.gc
     },
     players: playerCount,
     serverState: serverState,
