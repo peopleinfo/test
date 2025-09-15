@@ -241,42 +241,6 @@ class SpatialPartitioningAgent {
   }
 
   /**
-   * Optimized batch update for multiple objects
-   * Reduces individual update overhead
-   */
-  batchUpdateObjects(updates) {
-    const startTime = Date.now();
-    let updatedCount = 0;
-    
-    for (const update of updates) {
-      const { objectId, x, y, data, type } = update;
-      
-      if (this.objectToCell.has(objectId)) {
-        // Update existing object
-        this.updateObject(objectId, x, y, data);
-      } else {
-        // Add new object
-        this.addObject(objectId, x, y, type || 'generic', data);
-      }
-      updatedCount++;
-    }
-    
-    const duration = Date.now() - startTime;
-    if (duration > 5) { // Only log if operation takes significant time
-      console.log(`🗂️ SPA: Batch updated ${updatedCount} objects in ${duration}ms`);
-    }
-  }
-
-  /**
-   * Remove multiple objects efficiently
-   */
-  batchRemoveObjects(objectIds) {
-    for (const objectId of objectIds) {
-      this.removeObject(objectId);
-    }
-  }
-
-  /**
    * Rebuild spatial grid (useful for optimization)
    */
   rebuild(objects) {

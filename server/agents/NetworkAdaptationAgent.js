@@ -12,46 +12,34 @@ class NetworkAdaptationAgent {
     // Network performance tracking
     this.networkMetrics = new Map();
     
-    // Player activity tracking
-    this.playerActivity = new Map();
-    
-    // Configuration for adaptive frequencies
+    // Adaptive frequency configuration
     this.config = {
-      baseFrequency: 33,     // 33ms = 30 FPS (improved from 20 FPS)
-      minFrequency: 16,      // 16ms = 60 FPS (max)
-      maxFrequency: 100,     // 100ms = 10 FPS (min, improved from 5 FPS)
+      baseFrequency: 100,        // Base update frequency (ms)
+      minFrequency: 50,          // Minimum update frequency (20 FPS)
+      maxFrequency: 1000,        // Maximum update frequency (1 FPS)
       
-      // Activity level multipliers (more aggressive scaling)
+      // Activity-based multipliers
       activityMultipliers: {
-        idle: 3.0,      // Much slower updates for idle players
-        low: 2.0,       // Slower for low activity
-        medium: 1.0,    // Normal frequency
-        high: 0.7,      // Faster for high activity
-        critical: 0.5   // Fastest for critical situations
+        high: 0.5,               // High activity = 2x faster updates
+        medium: 1.0,             // Medium activity = normal updates
+        low: 2.0,                // Low activity = 2x slower updates
+        idle: 4.0                // Idle = 4x slower updates
       },
       
-      // Network quality multipliers (optimized for stability)
+      // Network condition multipliers
       networkMultipliers: {
-        excellent: 0.7, // Faster updates for excellent connections
-        good: 0.9,      // Slightly faster for good connections
-        fair: 1.2,      // Slower for fair connections
-        poor: 2.0       // Much slower for poor connections
+        excellent: 0.8,          // Excellent network = faster updates
+        good: 1.0,               // Good network = normal updates
+        fair: 1.5,               // Fair network = slower updates
+        poor: 2.5                // Poor network = much slower updates
       },
       
-      // Server load multipliers (more responsive to load)
+      // Server load multipliers
       loadMultipliers: {
-        low: 0.8,       // Faster when server is idle
-        medium: 1.0,    // Normal frequency
-        high: 1.6,      // Slower when server is busy
-        critical: 2.5   // Much slower when overloaded
-      },
-      
-      // Player priority multipliers (new)
-      priorityMultipliers: {
-        vip: 0.6,       // VIP players get faster updates
-        active: 0.8,    // Active players get priority
-        normal: 1.0,    // Normal priority
-        background: 1.5 // Background players get slower updates
+        low: 0.9,                // Low load = slightly faster
+        medium: 1.0,             // Medium load = normal
+        high: 1.3,               // High load = slower
+        critical: 2.0            // Critical load = much slower
       },
       
       // Thresholds for activity detection
@@ -119,117 +107,38 @@ class NetworkAdaptationAgent {
   }
 
   /**
-   * Detect player activity level based on movement, actions, and game context
+   * Detect player activity level
    */
   detectActivityLevel(playerId, playerData, gameObjects = []) {
     const currentTime = Date.now();
-    const recentWindow = 3000; // 3 seconds for better analysis
     
-    // Get recent activity data
-    let activity = this.playerActivity.get(playerId);
-    if (!activity) {
-      activity = {
-        movements: [],
-        actions: [],
-        lastPosition: { x: playerData.x, y: playerData.y },
-        lastUpdate: currentTime,
-        combatEvents: [],
-        foodEvents: []
-      };
-      this.playerActivity.set(playerId, activity);
-    }
-    
-    // Calculate movement distance and velocity
-    const timeDelta = Math.max(currentTime - activity.lastUpdate, 16); // Min 16ms
-    const distance = Math.sqrt(
-      Math.pow(playerData.x - activity.lastPosition.x, 2) +
-      Math.pow(playerData.y - activity.lastPosition.y, 2)
+    // Check movement speed
+    const speed = Math.sqrt(
+      Math.pow(playerData.velocityX || 0, 2) + 
+      Math.pow(playerData.velocityY || 0, 2)
     );
-    const instantVelocity = distance / (timeDelta / 1000); // pixels per second
     
-    // Record movement if significant
-    if (distance > 3) {
-      activity.movements.push({
-        distance,
-        timestamp: currentTime,
-        velocity: instantVelocity,
-        acceleration: Math.abs(instantVelocity - (activity.movements[activity.movements.length - 1]?.velocity || 0))
-      });
-      activity.lastPosition = { x: playerData.x, y: playerData.y };
-    }
+    // Check time since last significant action
+    const timeSinceLastAction = currentTime - (playerData.lastActionTime || currentTime);
     
-    // Record action if recent
-    if (playerData.lastActionTime && currentTime - playerData.lastActionTime < 1000) {
-      activity.actions.push({
-        timestamp: playerData.lastActionTime,
-        type: 'input'
-      });
-    }
-    
-    // Detect combat situations (nearby players)
-    const nearbyPlayers = gameObjects.filter(obj => {
-      if (obj.type !== 'player' || obj.id === playerId) return false;
-      const dist = Math.sqrt(
-        Math.pow(obj.x - playerData.x, 2) + Math.pow(obj.y - playerData.y, 2)
+    // Check proximity to other objects (interaction potential)
+    const nearbyObjects = gameObjects.filter(obj => {
+      const distance = Math.sqrt(
+        Math.pow(obj.x - playerData.x, 2) + 
+        Math.pow(obj.y - playerData.y, 2)
       );
-      return dist < 100; // Within 100 pixels
+      return distance <= this.config.activityThresholds.interactionDistance;
     });
     
-    if (nearbyPlayers.length > 0) {
-      activity.combatEvents.push({ timestamp: currentTime, count: nearbyPlayers.length });
-    }
-    
-    // Detect food consumption (score changes)
-    if (playerData.score > (activity.lastScore || 0)) {
-      activity.foodEvents.push({ timestamp: currentTime, scoreGain: playerData.score - (activity.lastScore || 0) });
-    }
-    activity.lastScore = playerData.score;
-    
-    // Clean old data
-    const cleanupArrays = ['movements', 'actions', 'combatEvents', 'foodEvents'];
-    cleanupArrays.forEach(arrayName => {
-      activity[arrayName] = activity[arrayName].filter(
-        item => currentTime - item.timestamp < recentWindow
-      );
-    });
-    
-    // Calculate comprehensive activity metrics
-    const totalMovement = activity.movements.reduce((sum, m) => sum + m.distance, 0);
-    const avgVelocity = activity.movements.length > 0
-      ? activity.movements.reduce((sum, m) => sum + m.velocity, 0) / activity.movements.length
-      : 0;
-    const maxVelocity = activity.movements.length > 0
-      ? Math.max(...activity.movements.map(m => m.velocity))
-      : 0;
-    const avgAcceleration = activity.movements.length > 0
-      ? activity.movements.reduce((sum, m) => sum + (m.acceleration || 0), 0) / activity.movements.length
-      : 0;
-    const actionCount = activity.actions.length;
-    const combatTime = activity.combatEvents.length;
-    const foodCount = activity.foodEvents.length;
-    
-    // Calculate activity score (0-100)
-    let activityScore = 0;
-    activityScore += Math.min(totalMovement / 10, 25); // Movement contribution (0-25)
-    activityScore += Math.min(avgVelocity / 5, 20); // Velocity contribution (0-20)
-    activityScore += Math.min(actionCount * 5, 15); // Input contribution (0-15)
-    activityScore += Math.min(combatTime * 8, 20); // Combat contribution (0-20)
-    activityScore += Math.min(foodCount * 4, 10); // Food contribution (0-10)
-    activityScore += Math.min(avgAcceleration / 2, 10); // Acceleration contribution (0-10)
-    
-    activity.lastUpdate = currentTime;
-    
-    // Determine activity level based on score
-    if (activityScore < 5) {
+    // Determine activity level
+    if (timeSinceLastAction > this.config.activityThresholds.idleTime) {
       return 'idle';
-    } else if (activityScore < 20) {
-      return 'low';
-    } else if (activityScore < 50) {
-      return 'medium';
-    } else if (activityScore < 75) {
+    } else if (speed > this.config.activityThresholds.movementSpeed || nearbyObjects.length > 3) {
       return 'high';
+    } else if (speed > this.config.activityThresholds.movementSpeed * 0.5 || nearbyObjects.length > 0) {
+      return 'medium';
     } else {
-      return 'critical';
+      return 'low';
     }
   }
 
@@ -287,42 +196,6 @@ class NetworkAdaptationAgent {
   }
 
   /**
-   * Assess player priority based on game context
-   */
-  assessPlayerPriority(playerId, playerData, gameObjects = []) {
-    const currentTime = Date.now();
-    
-    // Check if player is in combat (high priority)
-    const nearbyPlayers = gameObjects.filter(obj => {
-      if (obj.type !== 'player' || obj.id === playerId) return false;
-      const dist = Math.sqrt(
-        Math.pow(obj.x - playerData.x, 2) + Math.pow(obj.y - playerData.y, 2)
-      );
-      return dist < 150; // Combat range
-    });
-    
-    // Check recent activity
-    const activity = this.playerActivity.get(playerId);
-    const recentActions = activity?.actions.filter(
-      action => currentTime - action.timestamp < 2000
-    ).length || 0;
-    
-    // Check score/size (larger players might be more important)
-    const scoreRank = playerData.score || 0;
-    
-    // Determine priority
-    if (nearbyPlayers.length >= 2 || recentActions >= 3) {
-      return 'vip'; // High priority for combat or very active players
-    } else if (nearbyPlayers.length >= 1 || recentActions >= 1 || scoreRank > 100) {
-      return 'active'; // Active players get priority
-    } else if (recentActions === 0 && (currentTime - (playerData.lastActionTime || currentTime)) > 5000) {
-      return 'background'; // Idle players get lower priority
-    } else {
-      return 'normal'; // Default priority
-    }
-  }
-
-  /**
    * Calculate adaptive update frequency for a player
    */
   calculateUpdateFrequency(playerId, playerData, gameObjects = [], serverMetrics = {}) {
@@ -345,15 +218,11 @@ class NetworkAdaptationAgent {
       serverMetrics.cpuUsage
     );
     
-    // Assess player priority
-    const playerPriority = this.assessPlayerPriority(playerId, playerData, gameObjects);
-    
     // Calculate base frequency with multipliers
     let frequency = this.config.baseFrequency;
     frequency *= this.config.activityMultipliers[activityLevel] || 1.0;
     frequency *= this.config.networkMultipliers[networkQuality] || 1.0;
     frequency *= this.config.loadMultipliers[serverLoad] || 1.0;
-    frequency *= this.config.priorityMultipliers[playerPriority] || 1.0;
     
     // Apply bounds
     frequency = Math.max(this.config.minFrequency, 
@@ -364,14 +233,12 @@ class NetworkAdaptationAgent {
       factors: {
         activity: activityLevel,
         network: networkQuality,
-        serverLoad: serverLoad,
-        priority: playerPriority
+        serverLoad: serverLoad
       },
       multipliers: {
         activity: this.config.activityMultipliers[activityLevel],
         network: this.config.networkMultipliers[networkQuality],
-        serverLoad: this.config.loadMultipliers[serverLoad],
-        priority: this.config.priorityMultipliers[playerPriority]
+        serverLoad: this.config.loadMultipliers[serverLoad]
       }
     };
     
@@ -439,20 +306,6 @@ class NetworkAdaptationAgent {
     };
     
     return Math.round(baseSize * (multipliers[serverLoad] || 1.0));
-  }
-
-  /**
-   * Record and smooth ping data for a player
-   */
-  recordPlayerPing(playerId, pingTime) {
-    // Simple ping recording for compatibility
-    this.updateNetworkMetrics(playerId, { rtt: pingTime });
-    
-    return {
-      smoothedPing: pingTime,
-      jitter: 0,
-      isOutlier: false
-    };
   }
 
   /**

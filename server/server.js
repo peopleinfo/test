@@ -2,6 +2,12 @@ const express = require("express");
 const http = require("http");
 const socketIo = require("socket.io");
 
+// Import optimization agents
+const { SpatialPartitioningAgent } = require('./agents/SpatialPartitioningAgent');
+const RelevancyScoreAgent = require('./agents/RelevancyScoreAgent');
+const { PredictiveCullingAgent } = require('./agents/PredictiveCullingAgent');
+const { NetworkAdaptationAgent } = require('./agents/NetworkAdaptationAgent');
+
 const app = express();
 const server = http.createServer(app);
 const io = socketIo(server, {
@@ -83,13 +89,18 @@ io.use((socket, next) => {
   next(); // Always allow connection, but track auth status
 });
 
-// Check with client config too avoid not sync
-
-const MIN_PLAYERS_FOR_BATTLE = 15
-// Bot configuration
+const MIN_PLAYERS_FOR_BATTLE = 10;
 const MAX_BOTS = MIN_PLAYERS_FOR_BATTLE;
 const POINT = 3; // Points awarded for eating food or dead points
 const FOOD_RADIUS = 5.5;
+
+// Client rendering - smooth visuals
+// const RENDER_FPS = 60; // 16ms
+// Network updates - optimized bandwidth  
+const RENDER_FPS = 15; // 15ms 
+// const RENDER_FPS = 20; // 50ms 
+// Game logic - consistent gameplay
+// const RENDER_FPS = 30; // 33ms
 
 // Bot management throttling
 let lastBotSpawnAttempt = 0;
@@ -462,6 +473,134 @@ const gameState = {
   worldHeight: 800,
 };
 
+// Initialize optimization agents
+const spatialAgent = new SpatialPartitioningAgent(gameState.worldWidth, gameState.worldHeight, 100);
+const relevancyAgent = new RelevancyScoreAgent();
+const predictiveAgent = new PredictiveCullingAgent();
+const networkAgent = new NetworkAdaptationAgent();
+
+// Client viewport tracking
+const clientViewports = new Map(); // playerId -> viewport bounds
+
+console.log('🚀 Network optimization agents initialized');
+console.log(`📊 Spatial partitioning: ${spatialAgent.getStats().gridWidth}x${spatialAgent.getStats().gridHeight} cells`);
+
+// Optimized game state broadcast with spatial culling and relevancy scoring
+function broadcastOptimizedGameState(targetPlayerId = null, eventType = 'gameUpdate') {
+  const currentTime = Date.now();
+  
+  // Get all connected players
+  const connectedPlayers = Array.from(gameState.players.values()).filter(p => p.alive);
+  
+  connectedPlayers.forEach(player => {
+    // Skip if targeting specific player and this isn't the target
+    if (targetPlayerId && player.id !== targetPlayerId) return;
+    
+    const viewport = clientViewports.get(player.id);
+    if (!viewport) {
+      // Fallback to full game state for players without viewport data
+      io.to(player.socketId).emit(eventType, {
+        players: connectedPlayers,
+        foods: gameState.foods,
+        deadPoints: gameState.deadPoints
+      });
+      return;
+    }
+    
+    // Use spatial partitioning to get relevant objects
+    const relevantPlayers = spatialAgent.getObjectsInViewport(
+      viewport.x, viewport.y, viewport.width, viewport.height, ['players']
+    );
+    
+    const relevantFoods = spatialAgent.getObjectsInViewport(
+      viewport.x, viewport.y, viewport.width, viewport.height, ['foods']
+    );
+    
+    const relevantDeadPoints = spatialAgent.getObjectsInViewport(
+      viewport.x, viewport.y, viewport.width, viewport.height, ['deadPoints']
+    );
+    
+    // Apply relevancy scoring with lower thresholds for better optimization
+    const scoredPlayers = relevancyAgent.scoreObjects(
+      relevantPlayers, viewport.playerX, viewport.playerY, 'players'
+    ).filter(obj => obj.score > 0.01); // Lower threshold for players
+    
+    const scoredFoods = relevancyAgent.scoreObjects(
+      relevantFoods, viewport.playerX, viewport.playerY, 'foods'
+    ).filter(obj => obj.score > 0.005); // Lower threshold for foods
+    
+    const scoredDeadPoints = relevancyAgent.scoreObjects(
+      relevantDeadPoints, viewport.playerX, viewport.playerY, 'deadPoints'
+    ).filter(obj => obj.score > 0.005); // Lower threshold for dead points
+    
+    // Get adaptive update frequency from network agent
+    const playerData = {
+      x: viewport.playerX,
+      y: viewport.playerY,
+      velocityX: player.velocityX || 0,
+      velocityY: player.velocityY || 0,
+      lastActionTime: player.lastActionTime || currentTime,
+      alive: player.alive
+    };
+    
+    const serverMetrics = {
+      playerCount: connectedPlayers.length,
+      objectCount: gameState.foods.length + gameState.deadPoints.length
+    };
+    
+    const allGameObjects = [...relevantPlayers, ...relevantFoods, ...relevantDeadPoints];
+    const updateFreq = networkAgent.getUpdateFrequency(player.id, playerData, allGameObjects, serverMetrics);
+    const shouldUpdate = (currentTime - (player.lastUpdate || 0)) >= updateFreq;
+    
+    if (shouldUpdate) {
+      // Send optimized game state
+      io.to(player.socketId).emit(eventType, {
+        players: scoredPlayers.map(obj => obj.object),
+        foods: scoredFoods.map(obj => obj.object),
+        deadPoints: scoredDeadPoints.map(obj => obj.object),
+        viewport: {
+          x: viewport.x,
+          y: viewport.y,
+          width: viewport.width,
+          height: viewport.height
+        }
+      });
+      
+      player.lastUpdate = currentTime;
+      
+      // Log optimization stats
+      const originalCount = connectedPlayers.length + gameState.foods.length + gameState.deadPoints.length;
+      const optimizedCount = scoredPlayers.length + scoredFoods.length + scoredDeadPoints.length;
+      const reduction = ((originalCount - optimizedCount) / originalCount * 100).toFixed(1);
+      
+      console.log(`🚀 Optimized update for ${player.id}: ${originalCount} → ${optimizedCount} objects (${reduction}% reduction)`);
+    }
+  });
+}
+
+// Update spatial partitioning with current game objects
+function updateSpatialPartitioning() {
+  // Clear existing spatial data
+  spatialAgent.clear();
+  
+  // Add all players to spatial grid
+  gameState.players.forEach(player => {
+    if (player.alive) {
+      spatialAgent.addObject(player.id, player.x, player.y, 'players', player);
+    }
+  });
+  
+  // Add all foods to spatial grid
+  gameState.foods.forEach(food => {
+    spatialAgent.addObject(food.id, food.x, food.y, 'foods', food);
+  });
+  
+  // Add all dead points to spatial grid
+  gameState.deadPoints.forEach(deadPoint => {
+    spatialAgent.addObject(deadPoint.id, deadPoint.x, deadPoint.y, 'deadPoints', deadPoint);
+  });
+}
+
 // Initialize food
 function initializeFoods() {
   gameState.foods = [];
@@ -494,7 +633,31 @@ function initializeFoods() {
   console.log(
     `🍎 Food initialization complete: ${gameState.foods.length} foods spawned`
   );
+  
+  // Update spatial partitioning after food initialization
+  updateSpatialPartitioning();
+  console.log(`🗂️ Spatial partitioning updated with ${gameState.foods.length} foods`);
 }
+
+// Start optimized game loop for spatial updates and broadcasts
+let gameLoopInterval;
+function startOptimizedGameLoop() {
+  if (gameLoopInterval) clearInterval(gameLoopInterval);
+  
+  gameLoopInterval = setInterval(() => {
+    // Broadcast optimized game state to all players
+    broadcastOptimizedGameState(null, 'gameUpdate');
+    
+    // Update predictive agent predictions
+    predictiveAgent.updatePredictions();
+    
+  }, 1000 / RENDER_FPS); 
+  
+  console.log('🎮 Optimized game loop started at 30 FPS');
+}
+
+// Start the optimized game loop
+startOptimizedGameLoop();
 
 function getRandomColor() {
   const colors = [
@@ -547,51 +710,18 @@ function getPointValueByType(type) {
     case "orange":
       return 12;
     case "grapes":
-      return 150;
+      return 50;
     default:
       return POINT;
   }
-}
-
-// Dynamic radius calculation based on snake length (matching client-side logic)
-function calculateSnakeRadius(points) {
-  const MAX_POINT_LENGTH = 1500; // limit max fatScaler
-  const POINT_LENGTH = points >= MAX_POINT_LENGTH ? MAX_POINT_LENGTH : points;
-  const baseFatScaler = 0.05; // Base fat scaler (matching client this.fatScaler)
-
-  let fatScaler;
-  // Calculate fat scaler based on percentage of total points (matching client logic exactly)
-    if (POINT_LENGTH <= 50) fatScaler = 50;
-    else if (POINT_LENGTH <= 150) fatScaler = 60;
-    else if (POINT_LENGTH <= 250) fatScaler = 70;
-    else if (POINT_LENGTH <= 350) fatScaler = 85;
-    else if (POINT_LENGTH <= 650) fatScaler = 90;
-    else if (POINT_LENGTH <= 880) fatScaler = 105;
-    else if (POINT_LENGTH <= 1000) fatScaler = 100;
-    else fatScaler = 105;
-
-  const calculatedRadius = Math.min(10, Math.max(4, fatScaler * baseFatScaler));
-  console.log(`🔢 RADIUS CALC DEBUG: calculateSnakeRadius(${points}) -> POINT_LENGTH: ${POINT_LENGTH}, fatScaler: ${fatScaler}, baseFatScaler: ${baseFatScaler}, calculatedRadius: ${calculatedRadius}`);
-  
-  // Test specific values for debugging
-  if (points >= 3000) {
-    console.log(`🔢 LARGE SNAKE DEBUG: ${points} points should give radius ${calculatedRadius} (fatScaler=${fatScaler} * baseFatScaler=${baseFatScaler} = ${fatScaler * baseFatScaler})`);
-  }
-  
-  return calculatedRadius;
 }
 
 // Size-adaptive food distribution generator for optimal snake body filling
 function generateOptimalFoodDistribution(
   targetScore,
   deadPoints,
-  availableSlots,
-  snakeRadius = 4 // Default radius if not provided
+  availableSlots
 ) {
-  // CRITICAL DEBUG: Log the received snake radius
-  console.log(`🍎 FOOD GENERATION DEBUG: Received snakeRadius=${snakeRadius} for dead food scaling`);
-  console.log(`🍎 FOOD GENERATION DEBUG: targetScore=${targetScore}, availableSlots=${availableSlots}`);
-  
   const foodTypes = [
     { type: "grapes", value: getPointValueByType("grapes") },
     { type: "orange", value: getPointValueByType("orange") },
@@ -602,67 +732,88 @@ function generateOptimalFoodDistribution(
 
   const snakeLength = deadPoints.length;
   const maxFoodItems = Math.min(availableSlots, snakeLength);
-// Snake size classification thresholds
-// SMALL_SNAKE_MAX: Snakes up to this length are considered small
-// MEDIUM_SNAKE_MAX: Snakes between SMALL_SNAKE_MAX and this length are medium, above are large
-const SMALL_SNAKE_MAX = 15;
-const MEDIUM_SNAKE_MAX = 140;
+  // Snake size classification thresholds
+  // SMALL_SNAKE_MAX: Snakes up to this length are considered small
+  // MEDIUM_SNAKE_MAX: Snakes between SMALL_SNAKE_MAX and this length are medium, above are large
+  const SMALL_SNAKE_MAX = 15;
+  const MEDIUM_SNAKE_MAX = 140;
 
-// Target food coverage percentages for different snake sizes
-// These determine how much of the snake's length should be covered with food
-// Lower percentages for larger snakes to maintain game balance
-const SMALL_SNAKE_COVERAGE = 0.37;  // 37% coverage for small snakes
-const MEDIUM_SNAKE_COVERAGE = 0.32; // 32% coverage for medium snakes
-const LARGE_SNAKE_COVERAGE = 0.30;  // 27% coverage for large snakes
+  // Target food coverage percentages for different snake sizes
+  // These determine how much of the snake's length should be covered with food
+  // Lower percentages for larger snakes to maintain game balance
+  const SMALL_SNAKE_COVERAGE = 0.37; // 37% coverage for small snakes
+  const MEDIUM_SNAKE_COVERAGE = 0.32; // 32% coverage for medium snakes
+  const LARGE_SNAKE_COVERAGE = 0.27; // 27% coverage for large snakes
 
-// Minimum and maximum food counts and distribution ratios for small snakes
-// These ensure small snakes get enough food while preventing overcrowding
-const SMALL_SNAKE_MIN_FOOD = 4;    // Minimum 4 food items for small snakes
-const SMALL_SNAKE_MAX_FOOD = 7;    // Maximum 7 food items for small snakes
-const SMALL_SNAKE_FOOD_RATIO = 0.4; // 40% of snake length for food calculation
+  // Minimum and maximum food counts and distribution ratios for small snakes
+  // These ensure small snakes get enough food while preventing overcrowding
+  const SMALL_SNAKE_MIN_FOOD = 4; // Minimum 4 food items for small snakes
+  const SMALL_SNAKE_MAX_FOOD = 7; // Maximum 7 food items for small snakes
+  const SMALL_SNAKE_FOOD_RATIO = 0.4; // 40% of snake length for food calculation
 
-// Medium snake food distribution parameters
-// Balanced values for medium-sized snakes to maintain steady growth
-const MEDIUM_SNAKE_MIN_FOOD = 6;    // Minimum 6 food items for medium snakes
-const MEDIUM_SNAKE_MAX_FOOD = 11;   // Maximum 11 food items for medium snakes
-const MEDIUM_SNAKE_FOOD_RATIO = 0.3; // 30% of snake length for food calculation
+  // Medium snake food distribution parameters
+  // Balanced values for medium-sized snakes to maintain steady growth
+  const MEDIUM_SNAKE_MIN_FOOD = 6; // Minimum 6 food items for medium snakes
+  const MEDIUM_SNAKE_MAX_FOOD = 11; // Maximum 11 food items for medium snakes
+  const MEDIUM_SNAKE_FOOD_RATIO = 0.3; // 30% of snake length for food calculation
 
-// Large snake food distribution parameters
-// Conservative values to prevent large snakes from growing too quickly
-const LARGE_SNAKE_MIN_FOOD = 8;     // Minimum 8 food items for large snakes
-const LARGE_SNAKE_MAX_FOOD = 150;    // Maximum 150 food items for large snakes
-const LARGE_SNAKE_FOOD_RATIO = 0.25; // 25% of snake length for food calculation
+  // Large snake food distribution parameters
+  // Conservative values to prevent large snakes from growing too quickly
+  const LARGE_SNAKE_MIN_FOOD = 8; // Minimum 8 food items for large snakes
+  const LARGE_SNAKE_MAX_FOOD = 16; // Maximum 16 food items for large snakes
+  const LARGE_SNAKE_FOOD_RATIO = 0.25; // 25% of snake length for food calculation
 
-// Calculate size-adaptive distribution strategy with moderate coverage
-const isSmallSnake = snakeLength <= SMALL_SNAKE_MAX;
-const isMediumSnake = snakeLength > SMALL_SNAKE_MAX && snakeLength <= MEDIUM_SNAKE_MAX;
+  // Calculate size-adaptive distribution strategy with moderate coverage
+  const isSmallSnake = snakeLength <= SMALL_SNAKE_MAX;
+  const isMediumSnake =
+    snakeLength > SMALL_SNAKE_MAX && snakeLength <= MEDIUM_SNAKE_MAX;
 
-// MINIMUM FOOD GUARANTEE: Balanced for proper spacing
-const minFoodCount = isSmallSnake ? Math.max(SMALL_SNAKE_MIN_FOOD, Math.min(SMALL_SNAKE_MAX_FOOD, Math.floor(snakeLength * SMALL_SNAKE_FOOD_RATIO))) :
-                    isMediumSnake ? Math.max(MEDIUM_SNAKE_MIN_FOOD, Math.min(MEDIUM_SNAKE_MAX_FOOD, Math.floor(snakeLength * MEDIUM_SNAKE_FOOD_RATIO))) :
-                    Math.max(LARGE_SNAKE_MIN_FOOD, Math.min(LARGE_SNAKE_MAX_FOOD, Math.floor(snakeLength * LARGE_SNAKE_FOOD_RATIO)));
+  // MINIMUM FOOD GUARANTEE: Balanced for proper spacing
+  const minFoodCount = isSmallSnake
+    ? Math.max(
+        SMALL_SNAKE_MIN_FOOD,
+        Math.min(
+          SMALL_SNAKE_MAX_FOOD,
+          Math.floor(snakeLength * SMALL_SNAKE_FOOD_RATIO)
+        )
+      )
+    : isMediumSnake
+    ? Math.max(
+        MEDIUM_SNAKE_MIN_FOOD,
+        Math.min(
+          MEDIUM_SNAKE_MAX_FOOD,
+          Math.floor(snakeLength * MEDIUM_SNAKE_FOOD_RATIO)
+        )
+      )
+    : Math.max(
+        LARGE_SNAKE_MIN_FOOD,
+        Math.min(
+          LARGE_SNAKE_MAX_FOOD,
+          Math.floor(snakeLength * LARGE_SNAKE_FOOD_RATIO)
+        )
+      );
 
-// Determine optimal food count with moderate coverage for proper spacing
-let targetFoodCount;
-if (isSmallSnake) {
-  // Small snakes: aim for 32-42% segment coverage (slightly tighter than before)
-  targetFoodCount = Math.max(
-    minFoodCount,
-    Math.min(Math.ceil(snakeLength * SMALL_SNAKE_COVERAGE), maxFoodItems)
-  );
-} else if (isMediumSnake) {
-  // Medium snakes: aim for 27-37% coverage (slightly tighter than before)
-  targetFoodCount = Math.max(
-    minFoodCount,
-    Math.min(Math.ceil(snakeLength * MEDIUM_SNAKE_COVERAGE), maxFoodItems)
-  );
-} else {
-  // Large snakes: aim for 22-32% coverage (slightly tighter than before)
-  targetFoodCount = Math.max(
-    minFoodCount,
-    Math.min(Math.ceil(snakeLength * LARGE_SNAKE_COVERAGE), maxFoodItems)
-  );
-}
+  // Determine optimal food count with moderate coverage for proper spacing
+  let targetFoodCount;
+  if (isSmallSnake) {
+    // Small snakes: aim for 32-42% segment coverage (slightly tighter than before)
+    targetFoodCount = Math.max(
+      minFoodCount,
+      Math.min(Math.ceil(snakeLength * SMALL_SNAKE_COVERAGE), maxFoodItems)
+    );
+  } else if (isMediumSnake) {
+    // Medium snakes: aim for 27-37% coverage (slightly tighter than before)
+    targetFoodCount = Math.max(
+      minFoodCount,
+      Math.min(Math.ceil(snakeLength * MEDIUM_SNAKE_COVERAGE), maxFoodItems)
+    );
+  } else {
+    // Large snakes: aim for 22-32% coverage (slightly tighter than before)
+    targetFoodCount = Math.max(
+      minFoodCount,
+      Math.min(Math.ceil(snakeLength * LARGE_SNAKE_COVERAGE), maxFoodItems)
+    );
+  }
 
   // MIXED FOOD DISTRIBUTION: 50% high-score, 50% lower-score foods
   const distribution = [];
@@ -674,14 +825,16 @@ if (isSmallSnake) {
   );
 
   // Define high-value and lower-value food categories
-  const highValueFoods = foodTypes.filter(f => f.value >= 12); // grapes(150), orange(12)
-  const lowerValueFoods = foodTypes.filter(f => f.value < 12); // cherry(9), apple(6), watermelon(3)
+  const highValueFoods = foodTypes.filter((f) => f.value >= 12); // grapes(150), orange(12)
+  const lowerValueFoods = foodTypes.filter((f) => f.value < 12); // cherry(9), apple(6), watermelon(3)
 
   // Calculate 50/50 split for food allocation
   const highValueSlots = Math.ceil(targetFoodCount * 0.5);
   const lowerValueSlots = targetFoodCount - highValueSlots;
 
-  console.log(`🎯 Mixed distribution: ${highValueSlots} high-value slots, ${lowerValueSlots} lower-value slots`);
+  console.log(
+    `🎯 Mixed distribution: ${highValueSlots} high-value slots, ${lowerValueSlots} lower-value slots`
+  );
 
   // Phase 1: Fill high-value slots (50% of total foods)
   let highValueFoodsPlaced = 0;
@@ -689,22 +842,27 @@ if (isSmallSnake) {
 
   // Start with grapes for maximum efficiency, then orange
   const sortedHighValue = [...highValueFoods].sort((a, b) => b.value - a.value);
-  
+
   for (const foodType of sortedHighValue) {
-    while (highValueFoodsPlaced < highValueSlots && remainingScore >= foodType.value) {
-      const existing = distribution.find(d => d.type === foodType.type);
+    while (
+      highValueFoodsPlaced < highValueSlots &&
+      remainingScore >= foodType.value
+    ) {
+      const existing = distribution.find((d) => d.type === foodType.type);
       if (existing) {
         existing.count++;
       } else {
         distribution.push({ ...foodType, count: 1 });
       }
-      
+
       remainingScore -= foodType.value;
       highValueScore += foodType.value;
       highValueFoodsPlaced++;
       totalFoods++;
-      
-      console.log(`  High-value: Added ${foodType.type} (${foodType.value} pts), placed: ${highValueFoodsPlaced}/${highValueSlots}`);
+
+      console.log(
+        `  High-value: Added ${foodType.type} (${foodType.value} pts), placed: ${highValueFoodsPlaced}/${highValueSlots}`
+      );
     }
   }
 
@@ -713,50 +871,64 @@ if (isSmallSnake) {
   let lowerValueScore = 0;
 
   // Use remaining score efficiently with lower-value foods
-  const sortedLowerValue = [...lowerValueFoods].sort((a, b) => b.value - a.value); // cherry(9), apple(6), watermelon(3)
-  
+  const sortedLowerValue = [...lowerValueFoods].sort(
+    (a, b) => b.value - a.value
+  ); // cherry(9), apple(6), watermelon(3)
+
   while (lowerValueFoodsPlaced < lowerValueSlots && remainingScore > 0) {
     let added = false;
-    
+
     for (const foodType of sortedLowerValue) {
-      if (lowerValueFoodsPlaced >= lowerValueSlots || remainingScore < foodType.value) continue;
-      
-      const existing = distribution.find(d => d.type === foodType.type);
+      if (
+        lowerValueFoodsPlaced >= lowerValueSlots ||
+        remainingScore < foodType.value
+      )
+        continue;
+
+      const existing = distribution.find((d) => d.type === foodType.type);
       if (existing) {
         existing.count++;
       } else {
         distribution.push({ ...foodType, count: 1 });
       }
-      
+
       remainingScore -= foodType.value;
       lowerValueScore += foodType.value;
       lowerValueFoodsPlaced++;
       totalFoods++;
       added = true;
-      
-      console.log(`  Lower-value: Added ${foodType.type} (${foodType.value} pts), placed: ${lowerValueFoodsPlaced}/${lowerValueSlots}`);
+
+      console.log(
+        `  Lower-value: Added ${foodType.type} (${foodType.value} pts), placed: ${lowerValueFoodsPlaced}/${lowerValueSlots}`
+      );
       break;
     }
-    
+
     if (!added) break; // Prevent infinite loop
   }
 
   // Phase 3: Fill any remaining slots to reach minimum food count
   while (totalFoods < minFoodCount) {
-    const watermelon = foodTypes.find(f => f.type === "watermelon");
-    const existing = distribution.find(d => d.type === "watermelon");
-    
+    const watermelon = foodTypes.find((f) => f.type === "watermelon");
+    const existing = distribution.find((d) => d.type === "watermelon");
+
     if (existing) {
       existing.count++;
     } else {
       distribution.push({ ...watermelon, count: 1 });
     }
-    
+
     totalFoods++;
-    console.log(`  Minimum guarantee: Added watermelon, total foods: ${totalFoods}`);
+    console.log(
+      `  Minimum guarantee: Added watermelon, total foods: ${totalFoods}`
+    );
   }
 
-  console.log(`🎯 Distribution complete: High-value score: ${highValueScore}, Lower-value score: ${lowerValueScore}, Total: ${highValueScore + lowerValueScore}`);
+  console.log(
+    `🎯 Distribution complete: High-value score: ${highValueScore}, Lower-value score: ${lowerValueScore}, Total: ${
+      highValueScore + lowerValueScore
+    }`
+  );
 
   // Enhanced spacing algorithm for better snake body coverage
   const newFoodItems = [];
@@ -779,34 +951,55 @@ if (isSmallSnake) {
       // Step size reduced by 0.2 from previous 2.5-3.5 range to 2.3-3.3 range
       const baseStep = (deadPoints.length - 1) / (totalFoods - 1);
       const spacingMultiplier = 2.3 + Math.random() * 1.0; // 2.3-3.3 range (reduced by 0.2)
-      const step = Math.max(2.3, Math.min(baseStep * spacingMultiplier, deadPoints.length / totalFoods));
-      
-      console.log(`🎯 Food spacing: Snake length ${deadPoints.length}, Foods ${totalFoods}, Step size ${step.toFixed(2)} (2.1-2.8x wider gaps)`);
-      
+      const step = Math.max(
+        2.3,
+        Math.min(baseStep * spacingMultiplier, deadPoints.length / totalFoods)
+      );
+
+      console.log(
+        `🎯 Food spacing: Snake length ${
+          deadPoints.length
+        }, Foods ${totalFoods}, Step size ${step.toFixed(
+          2
+        )} (2.1-2.8x wider gaps)`
+      );
+
       for (let i = 0; i < totalFoods; i++) {
-          let index;
-          if (totalFoods === 1) {
-            // Single food goes at head
-            index = 0;
-          } else if (i === totalFoods - 1) {
-            // Last food always goes at tail
-            index = deadPoints.length - 1;
-          } else {
-            // Moderate spacing: 2.1-2.8x wider than normal segments
-            const baseIndex = Math.floor(i * step);
-            // Add slight randomization for natural distribution
-            const offset = Math.random() < 0.2 ? (Math.random() < 0.5 ? -1 : 1) : 0;
-            index = Math.max(0, Math.min(deadPoints.length - 1, baseIndex + offset));
-          }
-          
-          // Ensure no duplicate indices for better distribution
-          while (segmentIndices.includes(index) && index < deadPoints.length - 1) {
-            index++;
-          }
-          
-          segmentIndices.push(index);
-          console.log(`🎯 Food ${i + 1}/${totalFoods} placed at segment ${index} (${((index / (deadPoints.length - 1)) * 100).toFixed(1)}% along snake)`);
+        let index;
+        if (totalFoods === 1) {
+          // Single food goes at head
+          index = 0;
+        } else if (i === totalFoods - 1) {
+          // Last food always goes at tail
+          index = deadPoints.length - 1;
+        } else {
+          // Moderate spacing: 2.1-2.8x wider than normal segments
+          const baseIndex = Math.floor(i * step);
+          // Add slight randomization for natural distribution
+          const offset =
+            Math.random() < 0.2 ? (Math.random() < 0.5 ? -1 : 1) : 0;
+          index = Math.max(
+            0,
+            Math.min(deadPoints.length - 1, baseIndex + offset)
+          );
         }
+
+        // Ensure no duplicate indices for better distribution
+        while (
+          segmentIndices.includes(index) &&
+          index < deadPoints.length - 1
+        ) {
+          index++;
+        }
+
+        segmentIndices.push(index);
+        console.log(
+          `🎯 Food ${i + 1}/${totalFoods} placed at segment ${index} (${(
+            (index / (deadPoints.length - 1)) *
+            100
+          ).toFixed(1)}% along snake)`
+        );
+      }
     }
   }
 
@@ -827,12 +1020,10 @@ if (isSmallSnake) {
           createdAt: timestamp,
           isScoreGenerated: true,
           originalScore: targetScore,
-          originalSnakeRadius: snakeRadius, // Add snake radius for dynamic scaling
+          isDeadSnakeFood: true,
+          snakeSegmentSize: dp.radius || 10,
+          snakeColor: dp.color || "#ff0000",
         };
-        
-        // CRITICAL DEBUG: Log each food item creation with radius
-        console.log(`🍎 CREATING FOOD: ${type} at (${dp.x.toFixed(1)}, ${dp.y.toFixed(1)}) with originalSnakeRadius=${snakeRadius}`);
-        console.log(`🍎 FOOD ITEM DEBUG: id=${foodItem.id}, originalSnakeRadius=${foodItem.originalSnakeRadius}`);
 
         newFoodItems.push(foodItem);
       }
@@ -965,7 +1156,7 @@ function isPositionSafe(x, y, radius, minDistance = 200) {
     y < boundaryBuffer ||
     y > gameState.worldHeight - boundaryBuffer
   ) {
-    console.log(`❌ DEBUG: Position unsafe - too close to boundaries`);
+    // console.log(`❌ DEBUG: Position unsafe - too close to boundaries`);
     return false;
   }
 
@@ -976,12 +1167,12 @@ function isPositionSafe(x, y, radius, minDistance = 200) {
     const distance = Math.hypot(x - player.x, y - player.y);
     const requiredDistance = minDistance + radius + player.radius;
     if (distance < requiredDistance) {
-      console.log(
-        `❌ DEBUG: Position unsafe - too close to player ${playerId} head (distance: ${distance.toFixed(
-          2
-        )}, required: ${requiredDistance.toFixed(2)})`
-      );
-      return false;
+      // console.log(
+      //   `❌ DEBUG: Position unsafe - too close to player ${playerId} head (distance: ${distance.toFixed(
+      //     2
+      //   )}, required: ${requiredDistance.toFixed(2)})`
+      // );
+      // return false;
     }
 
     // Check distance from player body points with enhanced safety
@@ -989,11 +1180,11 @@ function isPositionSafe(x, y, radius, minDistance = 200) {
       const pointDistance = Math.hypot(x - point.x, y - point.y);
       const requiredPointDistance = minDistance + radius + point.radius;
       if (pointDistance < requiredPointDistance) {
-        console.log(
-          `❌ DEBUG: Position unsafe - too close to player ${playerId} body (distance: ${pointDistance.toFixed(
-            2
-          )}, required: ${requiredPointDistance.toFixed(2)})`
-        );
+        // console.log(
+        //   `❌ DEBUG: Position unsafe - too close to player ${playerId} body (distance: ${pointDistance.toFixed(
+        //     2
+        //   )}, required: ${requiredPointDistance.toFixed(2)})`
+        // );
         return false;
       }
     }
@@ -1003,11 +1194,11 @@ function isPositionSafe(x, y, radius, minDistance = 200) {
   for (const deadPoint of gameState.deadPoints) {
     const deadDistance = Math.hypot(x - deadPoint.x, y - deadPoint.y);
     if (deadDistance < 40 + radius) {
-      console.log(
-        `❌ DEBUG: Position unsafe - too close to dead point (distance: ${deadDistance.toFixed(
-          2
-        )})`
-      );
+      // console.log(
+      //   `❌ DEBUG: Position unsafe - too close to dead point (distance: ${deadDistance.toFixed(
+      //     2
+      //   )})`
+      // );
       return false;
     }
   }
@@ -1019,9 +1210,9 @@ function isPositionSafe(x, y, radius, minDistance = 200) {
     if (foodDistance < 60) {
       nearbyFoodCount++;
       if (nearbyFoodCount >= 3) {
-        console.log(
-          `❌ DEBUG: Position unsafe - too many nearby foods (${nearbyFoodCount})`
-        );
+        // console.log(
+        //   `❌ DEBUG: Position unsafe - too many nearby foods (${nearbyFoodCount})`
+        // );
         return false;
       }
     }
@@ -1055,9 +1246,9 @@ function isPositionSafe(x, y, radius, minDistance = 200) {
   }
 
   if (clearDirections < 2) {
-    console.log(
-      `❌ DEBUG: Position unsafe - insufficient clear directions (${clearDirections}/4)`
-    );
+    // console.log(
+    //   `❌ DEBUG: Position unsafe - insufficient clear directions (${clearDirections}/4)`
+    // );
     return false;
   }
 
@@ -1513,12 +1704,33 @@ function isCollided(circle1, circle2) {
 function handleBotDeath(bot) {
   if (!bot.alive) return;
 
+  console.log(
+    "💀 BOT DEATH: Bot",
+    bot.id,
+    "is dying at position:",
+    bot.x,
+    bot.y
+  );
+  console.log(
+    "💀 BOT DEATH: Bot score:",
+    bot.score,
+    "points length:",
+    bot.points.length
+  );
+
   bot.alive = false;
 
   // Calculate 80% of bot's score for food conversion (same as human players)
   const targetScoreValue = Math.floor(bot.score * 0.8);
   const currentFoodCount = gameState.foods.length;
   const availableSlots = Math.max(0, gameState.maxFoods - currentFoodCount);
+
+  console.log(
+    "💀 BOT DEATH: Generating food - targetScore:",
+    targetScoreValue,
+    "availableSlots:",
+    availableSlots
+  );
 
   // Use generateOptimalFoodDistribution for consistent food creation
   const newFoodItems = generateOptimalFoodDistribution(
@@ -1527,11 +1739,31 @@ function handleBotDeath(bot) {
     availableSlots
   );
 
+  console.log("💀 BOT DEATH: Generated", newFoodItems.length, "food items");
+  newFoodItems.forEach((food, index) => {
+    console.log(`💀 Food ${index}:`, {
+      x: food.x,
+      y: food.y,
+      type: food.type,
+      isDeadSnakeFood: food.isDeadSnakeFood,
+      snakeColor: food.snakeColor,
+      snakeSegmentSize: food.snakeSegmentSize,
+    });
+  });
+
   // Add generated food items to game state
   gameState.foods.push(...newFoodItems);
 
   console.log(
-    `🍕 Bot death: Generated ${newFoodItems.length} optimally distributed food items from bot ${bot.id} | Score: ${bot.score.toFixed(1)} → Food value: ${targetScoreValue} (types: ${newFoodItems.map((f) => f.type).join(", ")})`
+    `🍕 Bot death: Generated ${
+      newFoodItems.length
+    } optimally distributed food items from bot ${
+      bot.id
+    } | Score: ${bot.score.toFixed(
+      1
+    )} → Food value: ${targetScoreValue} (types: ${newFoodItems
+      .map((f) => f.type)
+      .join(", ")})`
   );
 
   // Remove bot from game state
@@ -1547,7 +1779,6 @@ function handleBotDeath(bot) {
     playerId: bot.id,
     deadPoints: [], // No dead points anymore
     newFoods: newFoodItems, // Send new food items
-    snakeSegments: bot.points, // Include snake segments for transformation animation
   });
 
   // Also broadcast food update to sync all clients
@@ -2065,6 +2296,23 @@ function updateBots() {
     (p) => !p.isBot && p.alive
   );
 
+  const allBots = Array.from(gameState.players.values()).filter((p) => p.isBot);
+  const aliveBots = allBots.filter((p) => p.alive);
+
+  // Debug bot status every 10 seconds
+  if (
+    !updateBots.lastDebugTime ||
+    Date.now() - updateBots.lastDebugTime > 10000
+  ) {
+    console.log("🤖 BOT STATUS:", {
+      humanPlayers: humanPlayers.length,
+      totalBots: allBots.length,
+      aliveBots: aliveBots.length,
+      botIds: aliveBots.map((b) => b.id),
+    });
+    updateBots.lastDebugTime = Date.now();
+  }
+
   // If no human players, don't update bots at all
   if (humanPlayers.length === 0) {
     return;
@@ -2106,7 +2354,7 @@ function updateBots() {
     const boundaryBuffer = player.radius * 4; // Increased buffer
     const lookAheadDistance = player.speed * 15; // Look further ahead
     const nextX = player.x + Math.cos(player.angle) * lookAheadDistance;
-    const nextY = player.y + Math.sin(player.angle) * lookAheadDistance;
+    const nextY = player.y + Math.sin(player.angle * -1) * lookAheadDistance; // Inverted Y-axis to match client
 
     // Intelligent boundary avoidance - turn toward center instead of reflecting
     const centerX = gameState.worldWidth / 2;
@@ -2397,9 +2645,11 @@ function updateBots() {
       player.straightMovementDuration = 5000 + Math.random() * 3000; // 5-8 seconds (increased from 2-3)
     }
 
-    // Move bot
+    // Move bot - CRITICAL FIX: Use inverted Y-axis to match client coordinate system
+    // Client uses: y: Math.sin(angle * -coeffD2R) - inverted Y-axis
+    // Server must match this for consistent face/neck positioning
     const newX = player.x + Math.cos(player.angle) * player.speed;
-    const newY = player.y + Math.sin(player.angle) * player.speed;
+    const newY = player.y + Math.sin(player.angle * -1) * player.speed; // Inverted Y-axis to match client
 
     // Improved boundary collision detection - strict enforcement with edge case handling
     const minX = player.radius;
@@ -2630,7 +2880,31 @@ function updateBots() {
 
 // Initialize game
 initializeFoods();
-// console.log(
+
+// TEMPORARY: Test function to force bot death and create dead snake food
+function testDeadSnakeFood() {
+  console.log(
+    "🧪 TESTING: Forcing bot death to test dead snake food animation"
+  );
+  const bots = Array.from(gameState.players.values()).filter(
+    (p) => p.isBot && p.alive
+  );
+  if (bots.length > 0) {
+    const testBot = bots[0];
+    console.log(
+      `🧪 TESTING: Killing bot ${testBot.id} at position (${testBot.x}, ${testBot.y}) with score ${testBot.score}`
+    );
+    handleBotDeath(testBot);
+  } else {
+    console.log("🧪 TESTING: No alive bots found to kill");
+  }
+}
+
+// TEMPORARY: Auto-trigger test after 10 seconds
+// setTimeout(() => {
+//   testDeadSnakeFood();
+// }, 10000);
+// // console.log(
 //   `🎮 Game initialized: ${gameState.foods.length} foods spawned in ${gameState.worldWidth}x${gameState.worldHeight} world`
 // );
 
@@ -2680,7 +2954,7 @@ io.on("connection", (socket) => {
     const userName = finalUserInfo?.name || finalUserInfo?.firstName;
     const playerId = realUserId || generatePlayerId();
 
-    const playerRadius = 4; // Initial radius
+    const playerRadius = 4;
     const safePosition = findSafeSpawnPosition(playerRadius);
     const safeAngle = calculateSafeSpawnDirection(
       safePosition.x,
@@ -2752,9 +3026,18 @@ io.on("connection", (socket) => {
     if (humanPlayers.length === 1) {
       // First human player
       spawnBots(5);
+
+      // TEMPORARY: Test dead snake food immediately after spawning bots
+      // setTimeout(() => {
+      //   console.log('🧪 TESTING: Triggering dead snake food test after player join');
+      //   testDeadSnakeFood();
+      // }, 2000);
     }
 
-    // Send initial game state to new player
+    // Update spatial partitioning with new player
+    updateSpatialPartitioning();
+    
+    // Send initial game state to new player using optimized broadcast
     socket.emit("gameInit", {
       playerId: playerId,
       gameState: {
@@ -2765,6 +3048,11 @@ io.on("connection", (socket) => {
         worldHeight: gameState.worldHeight,
       },
     });
+    
+    // Start sending optimized updates to this player
+    setTimeout(() => {
+      broadcastOptimizedGameState(playerId, 'gameUpdate');
+    }, 1000); // Give client time to set up viewport tracking
 
     // Send initial leaderboard to new player
     const initialLeaderboard = generateLeaderboard();
@@ -2799,6 +3087,9 @@ io.on("connection", (socket) => {
       player.x = data.x;
       player.y = data.y;
       player.points = data.points;
+      
+      // Update spatial partitioning for moved player
+      spatialAgent.updateObject(player.id, player.x, player.y, player);
 
       // Check and remove spawn protection after 5 seconds
       const currentTime = Date.now();
@@ -2823,9 +3114,30 @@ io.on("connection", (socket) => {
         y: data.y,
         angle: data.angle,
         points: data.points,
-        radius: player.radius, // Include updated radius for client sync
         spawnProtection: hasSpawnProtection,
       });
+    }
+  });
+
+  // Handle viewport updates from client
+  socket.on("viewportUpdate", (data) => {
+    const { playerId, viewport } = data;
+    const player = gameState.players.get(playerId);
+    
+    if (player && player.alive && viewport) {
+      const { x, y, width, height, playerX, playerY } = viewport;
+      
+      // Store client viewport bounds
+      clientViewports.set(playerId, {
+        x, y, width, height,
+        playerX, playerY,
+        timestamp: Date.now()
+      });
+      
+      // Update predictive agent with player movement
+      predictiveAgent.updatePlayerMovement(playerId, playerX, playerY, Date.now());
+      
+      console.log(`🔍 Viewport updated for ${playerId}: (${x?.toFixed(1) || 'N/A'}, ${y?.toFixed(1) || 'N/A'}) ${width?.toFixed(1) || 'N/A'}x${height?.toFixed(1) || 'N/A'}`);
     }
   });
 
@@ -2858,35 +3170,6 @@ io.on("connection", (socket) => {
       player.score += pointValue;
       performanceMetrics.foodEaten++;
 
-      // Update player radius based on new score/segments (matching client-side logic)
-      // Calculate segments to add based on food point value (1 segment = 4 points, matching client)
-      const segmentsToAdd = Math.max(1, Math.floor(pointValue / 4));
-      
-      // Add new segments to player.points array (same as bot logic)
-      if (player.points.length > 0) {
-        const tail = player.points[player.points.length - 1];
-        for (let i = 0; i < segmentsToAdd; i++) {
-          player.points.push({
-            x: tail.x,
-            y: tail.y,
-            radius: player.radius,
-            color: player.color,
-            type: eatentype, // Store food type for when player dies
-          });
-        }
-      }
-      
-      const newPointsLength = player.points.length;
-      const newRadius = calculateSnakeRadius(newPointsLength);
-      
-      // Update player radius and all body segment radii
-      player.radius = newRadius;
-      for (let i = 0; i < player.points.length; i++) {
-        player.points[i].radius = newRadius;
-      }
-      
-      console.log(`🍎 Player ${playerId} ate ${eatentype}: added ${segmentsToAdd} segments, now has ${player.points.length} total points`);
-
       console.log(
         `🍎 Player ${playerId} ate food ${foodId}: regenerated from (${oldPos.x.toFixed(
           2
@@ -2897,6 +3180,9 @@ io.on("connection", (socket) => {
 
       // Score persistence now handled client-side
 
+      // Update spatial partitioning after food regeneration
+      spatialAgent.updateObject(food.id, food.x, food.y, food);
+      
       // Broadcast food regeneration to all players
       io.emit("foodRegenerated", food);
 
@@ -2969,7 +3255,9 @@ io.on("connection", (socket) => {
       // Remove only the valid (aged) dead points from game state
       // Sort indices in descending order to avoid index shifting issues
       validDeadPoints.sort((a, b) => b.index - a.index);
-      validDeadPoints.forEach(({ index }) => {
+      validDeadPoints.forEach(({ point, index }) => {
+        // Remove from spatial partitioning before removing from game state
+        spatialAgent.removeObject(point.id);
         gameState.deadPoints.splice(index, 1);
       });
 
@@ -2983,43 +3271,6 @@ io.on("connection", (socket) => {
       });
       player.score += totalPoints;
       performanceMetrics.deadPointsEaten += consumedCount;
-
-      // Update player radius based on consumed dead points (matching client-side logic)
-      if (consumedCount > 0) {
-        // Calculate segments to add based on total points consumed (1 segment = 4 points, matching client)
-        const segmentsToAdd = Math.max(1, Math.floor(totalPoints / 4));
-        
-        // Add new segments to player.points array (same as food consumption logic)
-        if (player.points.length > 0) {
-          const tail = player.points[player.points.length - 1];
-          validDeadPoints.forEach(({ point }) => {
-            const deadPointType = point.type || "watermelon";
-            const pointValue = getPointValueByType(deadPointType);
-            const segmentsForThisPoint = Math.max(1, Math.floor(pointValue / 4));
-            
-            for (let i = 0; i < segmentsForThisPoint; i++) {
-              player.points.push({
-                x: tail.x,
-                y: tail.y,
-                radius: player.radius,
-                color: player.color,
-                type: deadPointType, // Store food type from consumed dead point
-              });
-            }
-          });
-        }
-        
-        const newPointsLength = player.points.length;
-        const newRadius = calculateSnakeRadius(newPointsLength);
-        
-        // Update player radius and all body segment radii
-        player.radius = newRadius;
-        for (let i = 0; i < player.points.length; i++) {
-          player.points[i].radius = newRadius;
-        }
-        
-        console.log(`🍖 Player ${playerId} ate ${consumedCount} dead points: added ${segmentsToAdd} segments, now has ${player.points.length} total points`);
-      }
 
       // Only broadcast removal if there were valid dead points consumed
       if (consumedCount > 0) {
@@ -3057,12 +3308,6 @@ io.on("connection", (socket) => {
 
   // Handle player death - optimized for performance
   socket.on("playerDied", (data) => {
-    console.log('🚨 PLAYER DIED EVENT RECEIVED!', JSON.stringify(data, null, 2));
-    console.log('🚨 DATA ANALYSIS:', {
-      playerId: data.playerId,
-      scoreFromClient: data.score,
-      deadPointsLength: data.deadPoints ? data.deadPoints.length : 'undefined'
-    });
     const startTime = performance.now();
     const player = gameState.players.get(data.playerId);
     if (!player) return;
@@ -3072,52 +3317,27 @@ io.on("connection", (socket) => {
     const totalScore = player.score || deadPoints.length;
     const targetScoreValue = Math.floor(totalScore * 0.8); // 80% of score as food value
 
-    // Recalculate snake radius based on current point count to ensure accuracy
-    const currentPointCount = deadPoints ? deadPoints.length : player.points.length;
-    const clientScore = data.score || totalScore; // Use client's reported score
-    const recalculatedRadius = calculateSnakeRadius(currentPointCount); // Use point count (body segments) for radius calculation
-    
-    console.log(`🔍 CRITICAL DEBUG: Server vs Client data:`);
-    console.log(`  - Server player.points.length: ${player.points.length}`);
-    console.log(`  - Client deadPoints.length: ${deadPoints ? deadPoints.length : 'undefined'}`);
-    console.log(`  - Using currentPointCount: ${currentPointCount}`);
-    console.log(`  - Client reported score: ${data.score}`);
-    console.log(`  - Using point count ${currentPointCount} for radius calculation`);
-    console.log(`  - Calculated radius: ${recalculatedRadius}`);
-    
     console.log(
       `💀 Death handling: Player ${data.playerId} score ${totalScore} → generating ${targetScoreValue} points worth of food`
     );
-    console.log(
-      `🐍 DEBUG: Dead snake - stored radius: ${player.radius}, points: ${currentPointCount}, recalculated radius: ${recalculatedRadius}`
-    );
-    
-    // DEBUG: Log actual snake death details for debugging
-    console.log('🧪 DEBUG: Snake death details:');
-    console.log(`  - currentPointCount: ${currentPointCount}`);
-    console.log(`  - player.score: ${player.score}`);
-    console.log(`  - recalculatedRadius: ${recalculatedRadius}`);
-    console.log(`  - deadPoints.length: ${deadPoints.length}`);
-    console.log(`  - data.deadPoints.length: ${data.deadPoints ? data.deadPoints.length : 'undefined'}`);
-    
-    // Test what radius a large snake (200+ body segments) should have
-    const testRadius200 = calculateSnakeRadius(200);
-    console.log(`🧪 TEST: A 200-segment snake should have radius: ${testRadius200}`);
-    
-    // CRITICAL DEBUG: Check if we're using the right point count
-    console.log(`🔍 CRITICAL: Using currentPointCount=${currentPointCount} for radius calculation`);
-    console.log(`🔍 CRITICAL: This should result in radius=${recalculatedRadius} for dead food`);
 
-    // Optimized food generation with exact score matching and snake size info
+    // Optimized food generation with exact score matching
     const newFoodItems = generateOptimalFoodDistribution(
       targetScoreValue,
       deadPoints,
-      gameState.maxFoods - gameState.foods.length,
-      recalculatedRadius // Pass recalculated snake radius for dynamic scaling
+      gameState.maxFoods - gameState.foods.length
     );
 
     // Batch add foods to game state
     gameState.foods.push(...newFoodItems);
+    
+    // Update spatial partitioning with new food items
+    newFoodItems.forEach(food => {
+      spatialAgent.addObject(food, 'foods');
+    });
+    
+    // Remove dead player from spatial partitioning
+    spatialAgent.removeObject(player.id);
 
     const endTime = performance.now();
     console.log(
@@ -3131,7 +3351,6 @@ io.on("connection", (socket) => {
       playerId: data.playerId,
       deadPoints: [],
       newFoods: newFoodItems,
-      snakeSegments: player.points, // Include snake segments for transformation animation
     });
 
     // Trigger cleanup if needed (non-blocking)
@@ -3194,22 +3413,24 @@ io.on("connection", (socket) => {
             points: [],
             alive: true,
             score: 0,
-            radius: 4, // Reset to initial radius on respawn
             spawnProtection: true,
             spawnTime: spawnTime,
           };
 
-          // Initialize respawned player with starting points using player's main color and reset radius
+          // Initialize respawned player with starting points using player's main color
           for (let i = 0; i < 25; i++) {
             respawnedPlayer.points.push({
               x: respawnedPlayer.x - i * 2,
               y: respawnedPlayer.y,
-              radius: 4, // Use reset radius for all body points
+              radius: respawnedPlayer.radius,
               color: respawnedPlayer.color, // Use player's main color for consistency
             });
           }
 
           gameState.players.set(data.playerId, respawnedPlayer);
+          
+          // Add respawned player to spatial partitioning
+          spatialAgent.addObject(respawnedPlayer, 'players');
 
           console.log(
             `✅ DEBUG: Player ${data.playerId} successfully respawned with ${respawnedPlayer.points.length} body points`
@@ -3273,6 +3494,8 @@ io.on("connection", (socket) => {
     // Find and remove player (only human players, keep bots)
     const player = gameState.players.get(data.playerId);
     if (player && player.socketId === socket.id && !player.isBot) {
+      // Remove from spatial partitioning before deleting
+      spatialAgent.removeObject(player.id);
       gameState.players.delete(data.playerId);
       io.emit("playerDisconnected", data.playerId);
       socket.broadcast.emit("playerLeft", {
@@ -3303,6 +3526,11 @@ io.on("connection", (socket) => {
       }
     }
     if (disconnectedPlayerId) {
+      const player = gameState.players.get(disconnectedPlayerId);
+      if (player) {
+        // Remove from spatial partitioning before deleting
+        spatialAgent.removeObject(player.id);
+      }
       gameState.players.delete(disconnectedPlayerId);
       performanceMetrics.playerDisconnections++;
       updatePeakMetrics();
@@ -3392,13 +3620,21 @@ function startBotIntervals() {
               player.spawnProtection &&
               currentTime - player.spawnTime < spawnProtectionDuration;
 
+            // Ensure bot points have the same detailed structure as human players
+            const formattedPoints = player.points.map((p) => ({
+              x: p.x || p.x === 0 ? p.x : player.x,
+              y: p.y || p.y === 0 ? p.y : player.y,
+              radius: p.radius || player.radius || 8,
+              color: p.color || player.color,
+              type: p.type || "watermelon",
+            }));
+
             io.emit("playerMoved", {
               playerId: player.id,
               x: player.x,
               y: player.y,
-              angle: player.angle,
-              points: player.points,
-              radius: player.radius, // Include updated radius for client sync
+              angle: player.angle * (180 / Math.PI), // Convert radians to degrees for client
+              points: formattedPoints,
               spawnProtection: hasSpawnProtection,
             });
           }
@@ -3577,26 +3813,26 @@ function generateFullLeaderboard() {
 }
 
 // Send periodic game state updates
-setInterval(() => {
-  const playerCount = gameState.players.size;
-  const leaderboard = generateLeaderboard();
+// setInterval(() => {
+//   const playerCount = gameState.players.size;
+//   const leaderboard = generateLeaderboard();
 
-  io.emit("gameStats", {
-    playerCount: playerCount,
-    foodCount: gameState.foods.length,
-    leaderboard: leaderboard,
-  });
-}, 5000);
+//   io.emit("gameStats", {
+//     playerCount: playerCount,
+//     foodCount: gameState.foods.length,
+//     leaderboard: leaderboard,
+//   });
+// }, 5000);
 
-// Send leaderboard updates more frequently
-setInterval(() => {
-  const leaderboard = generateLeaderboard();
-  const fullLeaderboard = generateFullLeaderboard();
-  io.emit("leaderboardUpdate", {
-    leaderboard: leaderboard,
-    fullLeaderboard: fullLeaderboard,
-  });
-}, 1000);
+// // Send leaderboard updates more frequently
+// setInterval(() => {
+//   const leaderboard = generateLeaderboard();
+//   const fullLeaderboard = generateFullLeaderboard();
+//   io.emit("leaderboardUpdate", {
+//     leaderboard: leaderboard,
+//     fullLeaderboard: fullLeaderboard,
+//   });
+// }, 300);
 
 // Health check endpoint for Docker
 app.get("/health", (req, res) => {
@@ -3609,9 +3845,20 @@ app.get("/health", (req, res) => {
     timestamp: new Date().toISOString(),
     uptime: Math.floor(uptime),
     memory: {
+      // Raw memory values in MB
       rss: Math.round(memUsage.rss / 1024 / 1024),
       heapUsed: Math.round(memUsage.heapUsed / 1024 / 1024),
       heapTotal: Math.round(memUsage.heapTotal / 1024 / 1024),
+      external: Math.round(memUsage.external / 1024 / 1024),
+      arrayBuffers: Math.round(memUsage.arrayBuffers / 1024 / 1024),
+      
+      // Formatted display values
+      totalUsage: `${Math.round((memUsage.rss + memUsage.external) / 1024 / 1024)}MB`,
+      heapUsagePercent: `${Math.round((memUsage.heapUsed / memUsage.heapTotal) * 100)}%`,
+      
+      // Memory efficiency metrics
+      bytesPerPlayer: Math.round(memUsage.heapUsed / (gameState.players.size || 1)),
+      gcEnabled: !!global.gc
     },
     players: playerCount,
     serverState: serverState,
