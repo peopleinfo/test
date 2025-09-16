@@ -1701,7 +1701,7 @@ function isCollided(circle1, circle2) {
 }
 
 // Handle bot death - convert body to dead points and remove from game
-function handleBotDeath(bot) {
+function handleBotDeath(bot, killerId = null) {
   if (!bot.alive) return;
 
   console.log(
@@ -1773,6 +1773,16 @@ function handleBotDeath(bot) {
   // const remainingBots = Array.from(gameState.players.values()).filter(p => p.isBot && p.alive).length;
   // const totalPlayers = gameState.players.size;
   // console.log(`🤖 Bot Death: ${bot.id} died at (${bot.x.toFixed(2)}, ${bot.y.toFixed(2)}) | Score: ${bot.score.toFixed(1)} | Remaining bots: ${remainingBots} | Total players: ${totalPlayers}`);
+
+  // Broadcast kill event if there was a killer
+  if (killerId) {
+    io.emit("playerKilled", {
+      killerId: killerId,
+      victimId: bot.id,
+      victimLength: bot.points.length,
+      victimScore: bot.score
+    });
+  }
 
   // Broadcast bot death and new food items
   io.emit("playerDied", {
@@ -2714,7 +2724,7 @@ function updateBots() {
         // Check collision with other player's body points
         for (const point of otherPlayer.points) {
           if (isCollided(botHead, point)) {
-            handleBotDeath(player);
+            handleBotDeath(player, otherPlayer.id);
             collisionDetected = true;
             return;
           }
