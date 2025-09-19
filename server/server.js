@@ -18,6 +18,26 @@ const io = socketIo(server, {
   transports: ["websocket"],
   // transports: ["websocket", "polling"],
   allowEIO3: true,
+  // Enhanced compression settings
+  compression: true,
+  httpCompression: {
+    threshold: 1024, // Compress messages larger than 1KB
+    level: 6, // Compression level (1-9, 6 is good balance)
+    chunkSize: 1024,
+  },
+  // Optimize for performance
+  perMessageDeflate: {
+    threshold: 1024,
+    zlibDeflateOptions: {
+      level: 6,
+      chunkSize: 1024,
+    },
+  },
+  // Connection optimization
+  pingTimeout: 60000,
+  pingInterval: 25000,
+  upgradeTimeout: 10000,
+  maxHttpBufferSize: 1e6, // 1MB max message size
 });
 
 // Token validation utility
@@ -89,7 +109,7 @@ io.use((socket, next) => {
   next(); // Always allow connection, but track auth status
 });
 
-const MIN_PLAYERS_FOR_BATTLE = 10;
+const MIN_PLAYERS_FOR_BATTLE = 5;
 const MAX_BOTS = MIN_PLAYERS_FOR_BATTLE;
 const POINT = 3; // Points awarded for eating food or dead points
 const FOOD_RADIUS = 5.5;
@@ -97,7 +117,7 @@ const FOOD_RADIUS = 5.5;
 // Client rendering - smooth visuals
 // const RENDER_FPS = 60; // 16ms
 // Network updates - optimized bandwidth  
-const RENDER_FPS = 15; // 15ms 
+const RENDER_FPS = 50; // 15ms 
 // const RENDER_FPS = 20; // 50ms 
 // Game logic - consistent gameplay
 // const RENDER_FPS = 30; // 33ms
@@ -468,7 +488,7 @@ const gameState = {
   players: new Map(),
   foods: [],
   deadPoints: [],
-  maxFoods: 350,
+  maxFoods: 300,
   worldWidth: 1200,
   worldHeight: 800,
 };
@@ -743,7 +763,7 @@ function generateOptimalFoodDistribution(
   // Lower percentages for larger snakes to maintain game balance
   const SMALL_SNAKE_COVERAGE = 0.37; // 37% coverage for small snakes
   const MEDIUM_SNAKE_COVERAGE = 0.32; // 32% coverage for medium snakes
-  const LARGE_SNAKE_COVERAGE = 0.27; // 27% coverage for large snakes
+  const LARGE_SNAKE_COVERAGE = 0.09; // 27% coverage for large snakes
 
   // Minimum and maximum food counts and distribution ratios for small snakes
   // These ensure small snakes get enough food while preventing overcrowding
@@ -761,7 +781,7 @@ function generateOptimalFoodDistribution(
   // Conservative values to prevent large snakes from growing too quickly
   const LARGE_SNAKE_MIN_FOOD = 8; // Minimum 8 food items for large snakes
   const LARGE_SNAKE_MAX_FOOD = 16; // Maximum 16 food items for large snakes
-  const LARGE_SNAKE_FOOD_RATIO = 0.25; // 25% of snake length for food calculation
+  const LARGE_SNAKE_FOOD_RATIO = 0.07; // 25% of snake length for food calculation
 
   // Calculate size-adaptive distribution strategy with moderate coverage
   const isSmallSnake = snakeLength <= SMALL_SNAKE_MAX;
@@ -3324,11 +3344,12 @@ io.on("connection", (socket) => {
 
     player.alive = false;
     const deadPoints = data.deadPoints;
+    const killerId = data.killerId; // Get killer ID from client
     const totalScore = player.score || deadPoints.length;
     const targetScoreValue = Math.floor(totalScore * 0.8); // 80% of score as food value
 
     console.log(
-      `💀 Death handling: Player ${data.playerId} score ${totalScore} → generating ${targetScoreValue} points worth of food`
+      `💀 Death handling: Player ${data.playerId} score ${totalScore} → generating ${targetScoreValue} points worth of food${killerId ? `, killed by: ${killerId}` : ''}`
     );
 
     // Optimized food generation with exact score matching
@@ -3362,6 +3383,17 @@ io.on("connection", (socket) => {
       deadPoints: [],
       newFoods: newFoodItems,
     });
+
+    // Broadcast kill event if there was a killer (for human vs human kills)
+    if (killerId && !player.isBot) {
+      io.emit("playerKilled", {
+        killerId: killerId,
+        victimId: data.playerId,
+        victimLength: deadPoints.length,
+        victimScore: totalScore
+      });
+      console.log(`⚔️ Human vs Human kill: ${killerId} killed ${data.playerId}`);
+    }
 
     // Trigger cleanup if needed (non-blocking)
     if (gameState.foods.length > gameState.maxFoods * 0.8) {
