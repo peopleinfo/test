@@ -26,9 +26,9 @@ class RelevancyScoreAgent {
     // Distance thresholds for scoring
     this.distanceThresholds = {
       immediate: 100,      // Very close - maximum relevance
-      near: 200,          // Near - high relevance
-      medium: 400,        // Medium distance - moderate relevance
-      far: 800           // Far - low relevance
+      near: 150,          // Near - high relevance
+      medium: 300,        // Medium distance - moderate relevance
+      far: 600           // Far - low relevance
     };
     
     console.log('📊 Relevancy Scoring Agent initialized');
