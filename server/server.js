@@ -295,6 +295,7 @@ let botSpawnInterval = null;
 let lastBotSpawnTime = 0;
 const BOT_RESPAWN_INTERVAL = 5000; // 5 seconds between bot spawning cycles
 const BOT_SPAWN_STAGGER_DELAY = 500; // 500ms delay between individual bot spawns
+let lastBotLimitLog = 0;
 
 // ===== SERVER PERFORMANCE OPTIMIZATION CONFIGURATION =====
 
