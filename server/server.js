@@ -10,6 +10,9 @@ const RelevancyScoreAgent = require("./agents/RelevancyScoreAgent");
 const { PredictiveCullingAgent } = require("./agents/PredictiveCullingAgent");
 const { NetworkAdaptationAgent } = require("./agents/NetworkAdaptationAgent");
 
+// Import binary protocol for optimized data transmission
+const BinaryProtocol = require("./utils/binaryProtocol");
+
 const app = express();
 const server = http.createServer(app);
 const io = socketIo(server, {
@@ -111,18 +114,183 @@ io.use((socket, next) => {
   next(); // Always allow connection, but track auth status
 });
 
-const MIN_PLAYERS_FOR_BATTLE = 10;
+const MIN_PLAYERS_FOR_BATTLE = 3;
 const MAX_BOTS = MIN_PLAYERS_FOR_BATTLE;
 const POINT = 3; // Points awarded for eating food or dead points
 const FOOD_RADIUS = 5.5;
 
+// Viewport Configuration - SYNC WITH CLIENT gameConfig.ts
+const MIN_VIEWPORT_WIDTH = 920;
+const MIN_VIEWPORT_HEIGHT = 420;
+const MIN_VIEWPORT_SAFETY_MARGIN_X = 80; // Extra horizontal padding
+const MIN_VIEWPORT_SAFETY_MARGIN_Y = 40; // Extra vertical padding
+
+// Viewport Culling Configuration - SYNC WITH CLIENT ViewportOptimizer
+const VIEWPORT_CULLING_CONFIG = {
+  SAFETY_MARGIN_MULTIPLIER: 0.15, // 15% safety margin (matches client)
+  MIN_SAFETY_MARGIN_X: 20,
+  MIN_SAFETY_MARGIN_Y: 20,
+  VIEWPORT_PADDING_MULTIPLIER: 1.2, // Extra padding for server-side culling
+  DEBUG_VIEWPORT_SYNC: true, // Enable debug logging for viewport sync
+};
+
 // Client rendering - smooth visuals
 // const RENDER_FPS = 60; // 16ms
 // Network updates - optimized bandwidth
-const RENDER_FPS = 50; // 15ms
+const BASE_RENDER_FPS = 50; // 20ms base interval
 // const RENDER_FPS = 20; // 50ms
 // Game logic - consistent gameplay
 // const RENDER_FPS = 30; // 33ms
+
+// ===== ADAPTIVE RATE LIMITING CONFIGURATION =====
+const RATE_LIMITING_CONFIG = {
+  // Base FPS settings
+  MIN_FPS: 10,           // Minimum 10 FPS (100ms intervals)
+  MAX_FPS: 50,           // Maximum 50 FPS (20ms intervals)
+  BASE_FPS: 30,          // Default 30 FPS (33ms intervals)
+  
+  // Player count thresholds for adaptive FPS
+  PLAYER_THRESHOLDS: {
+    LOW: 2,              // 1-2 players: higher FPS
+    MEDIUM: 5,           // 3-5 players: medium FPS
+    HIGH: 10,            // 6-10 players: lower FPS
+    VERY_HIGH: 15        // 11+ players: minimum FPS
+  },
+  
+  // FPS adjustments based on player count
+  FPS_BY_PLAYER_COUNT: {
+    LOW: 40,             // 1-2 players: 40 FPS
+    MEDIUM: 30,          // 3-5 players: 30 FPS
+    HIGH: 20,            // 6-10 players: 20 FPS
+    VERY_HIGH: 15        // 11+ players: 15 FPS
+  },
+  
+  // Network condition adjustments
+  NETWORK_ADJUSTMENT: {
+    GOOD: 1.0,           // No adjustment
+    MODERATE: 0.8,       // 20% reduction
+    POOR: 0.6            // 40% reduction
+  },
+  
+  // Rate limiting per player
+  PER_PLAYER_LIMITS: {
+    MAX_UPDATES_PER_SEC: 30,     // Maximum 30 updates per second per player
+    BURST_LIMIT: 5,              // Allow 5 updates in burst
+    BURST_WINDOW: 1000,          // 1 second burst window
+    THROTTLE_THRESHOLD: 50       // Throttle after 50 updates/sec
+  }
+};
+
+// Dynamic FPS calculation
+let currentRenderFPS = RATE_LIMITING_CONFIG.BASE_FPS;
+let lastFPSUpdate = Date.now();
+const FPS_UPDATE_INTERVAL = 5000; // Update FPS every 5 seconds
+
+// Per-player rate limiting tracking
+const playerRateLimits = new Map();
+
+// Calculate adaptive FPS based on current conditions
+function calculateAdaptiveFPS() {
+  const playerCount = Array.from(gameState.players.values()).filter(p => !p.isBot).length;
+  const totalPlayers = gameState.players.size;
+  
+  let targetFPS;
+  
+  // Determine base FPS from player count
+  if (playerCount <= RATE_LIMITING_CONFIG.PLAYER_THRESHOLDS.LOW) {
+    targetFPS = RATE_LIMITING_CONFIG.FPS_BY_PLAYER_COUNT.LOW;
+  } else if (playerCount <= RATE_LIMITING_CONFIG.PLAYER_THRESHOLDS.MEDIUM) {
+    targetFPS = RATE_LIMITING_CONFIG.FPS_BY_PLAYER_COUNT.MEDIUM;
+  } else if (playerCount <= RATE_LIMITING_CONFIG.PLAYER_THRESHOLDS.HIGH) {
+    targetFPS = RATE_LIMITING_CONFIG.FPS_BY_PLAYER_COUNT.HIGH;
+  } else {
+    targetFPS = RATE_LIMITING_CONFIG.FPS_BY_PLAYER_COUNT.VERY_HIGH;
+  }
+  
+  // Apply network condition adjustments (using network agent data if available)
+  // Use server load assessment as network condition proxy
+  const objectCount = gameState.foods.length + gameState.deadPoints.length;
+  const serverLoad = networkAgent ? networkAgent.assessServerLoad(totalPlayers, objectCount) : 'medium';
+  
+  // Map server load to network condition for rate limiting
+  const networkConditionMap = {
+    'low': 'EXCELLENT',
+    'medium': 'GOOD', 
+    'high': 'FAIR',
+    'critical': 'POOR'
+  };
+  const networkCondition = networkConditionMap[serverLoad] || 'GOOD';
+  const networkMultiplier = RATE_LIMITING_CONFIG.NETWORK_ADJUSTMENT[networkCondition] || 1.0;
+  targetFPS = Math.floor(targetFPS * networkMultiplier);
+  
+  // Ensure FPS stays within bounds
+  targetFPS = Math.max(RATE_LIMITING_CONFIG.MIN_FPS, 
+                      Math.min(RATE_LIMITING_CONFIG.MAX_FPS, targetFPS));
+  
+  return targetFPS;
+}
+
+// Check if player should receive update (rate limiting)
+function shouldSendUpdateToPlayer(playerId) {
+  const now = Date.now();
+  const limits = RATE_LIMITING_CONFIG.PER_PLAYER_LIMITS;
+  
+  if (!playerRateLimits.has(playerId)) {
+    playerRateLimits.set(playerId, {
+      lastUpdate: 0,
+      updateCount: 0,
+      burstCount: 0,
+      burstStart: now,
+      throttled: false
+    });
+  }
+  
+  const playerLimit = playerRateLimits.get(playerId);
+  const timeSinceLastUpdate = now - playerLimit.lastUpdate;
+  const minInterval = 1000 / limits.MAX_UPDATES_PER_SEC;
+  
+  // Check if enough time has passed since last update
+  if (timeSinceLastUpdate < minInterval) {
+    return false;
+  }
+  
+  // Reset burst window if needed
+  if (now - playerLimit.burstStart > limits.BURST_WINDOW) {
+    playerLimit.burstCount = 0;
+    playerLimit.burstStart = now;
+    playerLimit.throttled = false;
+  }
+  
+  // Check burst limit
+  if (playerLimit.burstCount >= limits.BURST_LIMIT && !playerLimit.throttled) {
+    playerLimit.throttled = true;
+    return false;
+  }
+  
+  // Update counters
+  playerLimit.lastUpdate = now;
+  playerLimit.updateCount++;
+  if (!playerLimit.throttled) {
+    playerLimit.burstCount++;
+  }
+  
+  return true;
+}
+
+// Clean up rate limiting data for disconnected players
+function cleanupPlayerRateLimits() {
+  const activePlayers = new Set(gameState.players.keys());
+  for (const playerId of playerRateLimits.keys()) {
+    if (!activePlayers.has(playerId)) {
+      playerRateLimits.delete(playerId);
+    }
+  }
+}
+
+// Get current effective FPS
+function getCurrentFPS() {
+  return currentRenderFPS;
+}
 
 // Bot management throttling
 let lastBotSpawnAttempt = 0;
@@ -396,6 +564,25 @@ function logPerformanceMetrics() {
     `  Total Disconnections: ${performanceMetrics.playerDisconnections}`
   );
 
+  // Viewport sync statistics
+  const activeViewports = clientViewports.size;
+  const viewportStats = Array.from(clientViewports.values()).reduce((stats, viewport) => {
+    stats.totalWidth += viewport.width || 0;
+    stats.totalHeight += viewport.height || 0;
+    stats.count++;
+    return stats;
+  }, { totalWidth: 0, totalHeight: 0, count: 0 });
+
+  const avgViewportWidth = viewportStats.count > 0 ? (viewportStats.totalWidth / viewportStats.count).toFixed(1) : 0;
+  const avgViewportHeight = viewportStats.count > 0 ? (viewportStats.totalHeight / viewportStats.count).toFixed(1) : 0;
+
+  console.log(`\n🔍 VIEWPORT SYNCHRONIZATION:`);
+  console.log(`  Active Viewports: ${activeViewports}`);
+  console.log(`  Avg Viewport Size: ${avgViewportWidth}x${avgViewportHeight}`);
+  console.log(`  Min Required: ${MIN_VIEWPORT_WIDTH}x${MIN_VIEWPORT_HEIGHT}`);
+  console.log(`  Debug Mode: ${VIEWPORT_CULLING_CONFIG.DEBUG_VIEWPORT_SYNC ? 'ON' : 'OFF'}`);
+  console.log(`  Safety Margin: ${(VIEWPORT_CULLING_CONFIG.SAFETY_MARGIN_MULTIPLIER * 100).toFixed(1)}%`);
+
   // Game activity metrics
   console.log(`\n🎮 GAME ACTIVITY:`);
   console.log(`  Food Eaten: ${performanceMetrics.foodEaten}`);
@@ -514,8 +701,116 @@ const relevancyAgent = new RelevancyScoreAgent();
 const predictiveAgent = new PredictiveCullingAgent();
 const networkAgent = new NetworkAdaptationAgent();
 
+// Initialize binary protocol for optimized data transmission
+const binaryProtocol = new BinaryProtocol();
+
 // Client viewport tracking
 const clientViewports = new Map(); // playerId -> viewport bounds
+
+/**
+ * Validate viewport bounds against client constraints
+ * @param {Object} viewport - Viewport object from client
+ * @returns {boolean} - True if viewport is valid
+ */
+function validateViewportBounds(viewport) {
+  if (!viewport || typeof viewport !== 'object') {
+    return false;
+  }
+
+  const { x, y, width, height, playerX, playerY } = viewport;
+
+  // Check if all required properties exist and are numbers
+  if (typeof x !== 'number' || typeof y !== 'number' || 
+      typeof width !== 'number' || typeof height !== 'number' ||
+      typeof playerX !== 'number' || typeof playerY !== 'number') {
+    return false;
+  }
+
+  // Check minimum viewport dimensions (matches client MIN_VIEWPORT_WIDTH/HEIGHT)
+  if (width < MIN_VIEWPORT_WIDTH || height < MIN_VIEWPORT_HEIGHT) {
+    return false;
+  }
+
+  // Check for reasonable maximum dimensions (prevent abuse)
+  const MAX_VIEWPORT_WIDTH = gameState.worldWidth * 2;
+  const MAX_VIEWPORT_HEIGHT = gameState.worldHeight * 2;
+  if (width > MAX_VIEWPORT_WIDTH || height > MAX_VIEWPORT_HEIGHT) {
+    return false;
+  }
+
+  // Check if viewport bounds are within reasonable world bounds
+  const worldPadding = Math.max(width, height) * 0.5;
+  if (x < -worldPadding || y < -worldPadding || 
+      x + width > gameState.worldWidth + worldPadding || 
+      y + height > gameState.worldHeight + worldPadding) {
+    return false;
+  }
+
+  return true;
+}
+
+/**
+ * Calculate enhanced viewport bounds with server-side safety margins
+ * Matches client ViewportOptimizer.getViewportBounds() logic
+ * @param {Object} viewport - Original viewport from client
+ * @returns {Object} - Enhanced viewport with server-side optimizations
+ */
+function calculateEnhancedViewportBounds(viewport) {
+  const { x, y, width, height, playerX, playerY } = viewport;
+
+  // Apply safety margins that match client-side ViewportOptimizer
+  const safetyMarginX = Math.max(
+    VIEWPORT_CULLING_CONFIG.MIN_SAFETY_MARGIN_X,
+    width * VIEWPORT_CULLING_CONFIG.SAFETY_MARGIN_MULTIPLIER
+  );
+  const safetyMarginY = Math.max(
+    VIEWPORT_CULLING_CONFIG.MIN_SAFETY_MARGIN_Y,
+    height * VIEWPORT_CULLING_CONFIG.SAFETY_MARGIN_MULTIPLIER
+  );
+
+  // Add server-side padding for network latency compensation
+  const serverPadding = VIEWPORT_CULLING_CONFIG.VIEWPORT_PADDING_MULTIPLIER;
+  const enhancedWidth = width * serverPadding + safetyMarginX * 2;
+  const enhancedHeight = height * serverPadding + safetyMarginY * 2;
+
+  // Center the enhanced viewport on the player position
+  const enhancedX = playerX - enhancedWidth / 2;
+  const enhancedY = playerY - enhancedHeight / 2;
+
+  // Calculate culling and render distances (matches client quality levels)
+  const cullingDistance = Math.max(enhancedWidth, enhancedHeight) * 0.8; // High quality default
+  const renderDistance = Math.max(enhancedWidth, enhancedHeight) * 1.0;
+
+  return {
+    x: enhancedX,
+    y: enhancedY,
+    width: enhancedWidth,
+    height: enhancedHeight,
+    centerX: playerX,
+    centerY: playerY,
+    cullingDistance,
+    renderDistance,
+    safetyMarginX,
+    safetyMarginY,
+  };
+}
+
+/**
+ * Check if an object is within the enhanced viewport bounds
+ * @param {Object} object - Object with x, y, radius properties
+ * @param {Object} viewport - Enhanced viewport bounds
+ * @returns {boolean} - True if object should be included
+ */
+function isObjectInEnhancedViewport(object, viewport) {
+  if (!object || !viewport) return false;
+
+  const objectRadius = object.radius || 0;
+  const dx = object.x - viewport.centerX;
+  const dy = object.y - viewport.centerY;
+  const distance = Math.sqrt(dx * dx + dy * dy);
+
+  return distance <= viewport.cullingDistance + objectRadius;
+}
 
 console.log("🚀 Network optimization agents initialized");
 console.log(
@@ -523,8 +818,16 @@ console.log(
     spatialAgent.getStats().gridHeight
   } cells`
 );
+console.log(`🔍 Viewport culling config: ${JSON.stringify(VIEWPORT_CULLING_CONFIG, null, 2)}`);
+console.log(`📐 Minimum viewport: ${MIN_VIEWPORT_WIDTH}x${MIN_VIEWPORT_HEIGHT} with margins ${MIN_VIEWPORT_SAFETY_MARGIN_X}x${MIN_VIEWPORT_SAFETY_MARGIN_Y}`);
 
-// Optimized game state broadcast with spatial culling and relevancy scoring
+// Enhanced batch update storage for efficient transmission with delta compression
+const playerUpdateBatches = new Map(); // playerId -> batch of updates with previous states
+const playerPreviousStates = new Map(); // playerId -> previous state for delta compression
+const BATCH_SIZE = 6; // Reduced batch size for better responsiveness
+const BATCH_TIMEOUT = 33; // 30fps = 33ms timeout
+
+// Enhanced game state broadcast with improved delta compression and batching
 function broadcastOptimizedGameState(
   targetPlayerId = null,
   eventType = "gameUpdate"
@@ -536,70 +839,164 @@ function broadcastOptimizedGameState(
     (p) => p.alive
   );
 
+  // Enhanced spatial partitioning - only process players in active viewports
+  const activeViewports = new Map();
+  connectedPlayers.forEach((player) => {
+    const viewport = clientViewports.get(player.id);
+    if (viewport) {
+      activeViewports.set(player.id, viewport);
+    }
+  });
+
   connectedPlayers.forEach((player) => {
     // Skip if targeting specific player and this isn't the target
     if (targetPlayerId && player.id !== targetPlayerId) return;
 
-    const viewport = clientViewports.get(player.id);
-    if (!viewport) {
-      // Fallback to full game state for players without viewport data
-      io.to(player.socketId).emit(eventType, {
-        players: connectedPlayers,
-        foods: gameState.foods,
-        deadPoints: gameState.deadPoints,
-      });
+    // Enhanced rate limiting with adaptive throttling
+    if (!shouldSendUpdateToPlayer(player.id)) {
       return;
     }
 
-    // Use spatial partitioning to get relevant objects
+    const viewport = activeViewports.get(player.id);
+    if (!viewport) {
+      // Minimal fallback for players without viewport data
+      const minimalFallback = {
+        players: connectedPlayers.slice(0, 3), // Reduced to 3 closest players
+        foods: gameState.foods.slice(0, 15), // Reduced to 15 foods
+        deadPoints: gameState.deadPoints.slice(0, 8), // Reduced to 8 dead points
+      };
+      
+      const optimizedFallback = binaryProtocol.createOptimizedGameState(
+        player.id,
+        minimalFallback
+      );
+      const binaryFallback = binaryProtocol.serialize(optimizedFallback);
+      io.to(player.socketId).emit('binaryGameUpdate', binaryFallback);
+      return;
+    }
+
+    // Enhanced spatial partitioning using synchronized viewport bounds
+    // Use enhanced viewport bounds that match client-side ViewportOptimizer
+    const enhancedViewport = clientViewports.get(targetPlayerId);
+    let queryViewport = viewport;
+    
+    if (enhancedViewport && VIEWPORT_CULLING_CONFIG.DEBUG_VIEWPORT_SYNC) {
+      // Use enhanced viewport for more accurate culling
+      queryViewport = enhancedViewport;
+      console.log(`🔧 Using enhanced viewport for ${targetPlayerId}: ${queryViewport.width.toFixed(1)}x${queryViewport.height.toFixed(1)}`);
+    }
+
+    // Debug logging for viewport culling decisions
+    if (VIEWPORT_CULLING_CONFIG.DEBUG_VIEWPORT_SYNC) {
+      console.log(`[VIEWPORT-CULLING] Player ${targetPlayerId}: Query viewport ${queryViewport.width.toFixed(1)}x${queryViewport.height.toFixed(1)} at (${queryViewport.x.toFixed(1)}, ${queryViewport.y.toFixed(1)})`);
+    }
+
+    // Apply viewport padding that matches client-side safety margins
+    const viewportPadding = Math.max(
+      queryViewport.safetyMarginX || Math.max(VIEWPORT_CULLING_CONFIG.MIN_SAFETY_MARGIN_X, queryViewport.width * VIEWPORT_CULLING_CONFIG.SAFETY_MARGIN_MULTIPLIER),
+      queryViewport.safetyMarginY || Math.max(VIEWPORT_CULLING_CONFIG.MIN_SAFETY_MARGIN_Y, queryViewport.height * VIEWPORT_CULLING_CONFIG.SAFETY_MARGIN_MULTIPLIER)
+    );
+
     const relevantPlayers = spatialAgent.getObjectsInViewport(
-      viewport.x,
-      viewport.y,
-      viewport.width,
-      viewport.height,
+      queryViewport.x - viewportPadding,
+      queryViewport.y - viewportPadding,
+      queryViewport.width + (viewportPadding * 2),
+      queryViewport.height + (viewportPadding * 2),
       ["players"]
     );
 
     const relevantFoods = spatialAgent.getObjectsInViewport(
-      viewport.x,
-      viewport.y,
-      viewport.width,
-      viewport.height,
+      queryViewport.x - viewportPadding,
+      queryViewport.y - viewportPadding,
+      queryViewport.width + (viewportPadding * 2),
+      queryViewport.height + (viewportPadding * 2),
       ["foods"]
     );
 
     const relevantDeadPoints = spatialAgent.getObjectsInViewport(
-      viewport.x,
-      viewport.y,
-      viewport.width,
-      viewport.height,
+      queryViewport.x - viewportPadding,
+      queryViewport.y - viewportPadding,
+      queryViewport.width + (viewportPadding * 2),
+      queryViewport.height + (viewportPadding * 2),
       ["deadPoints"]
     );
 
-    // Apply relevancy scoring with lower thresholds for better optimization
+    // Enhanced relevancy scoring with synchronized culling distances
+    // Use culling distance from enhanced viewport if available
+    const cullingDistance = enhancedViewport?.cullingDistance || Math.max(queryViewport.width, queryViewport.height) * 0.8;
+    const renderDistance = enhancedViewport?.renderDistance || Math.max(queryViewport.width, queryViewport.height) * 1.0;
+    
+    if (VIEWPORT_CULLING_CONFIG.DEBUG_VIEWPORT_SYNC && enhancedViewport) {
+      console.log(`🎯 Using synchronized culling distances for ${targetPlayerId}: culling=${cullingDistance.toFixed(1)}, render=${renderDistance.toFixed(1)}`);
+    }
+    
     const scoredPlayers = relevancyAgent
       .scoreObjects(
         relevantPlayers,
-        viewport.playerX,
-        viewport.playerY,
+        queryViewport.playerX || viewport.playerX,
+        queryViewport.playerY || viewport.playerY,
         "players"
       )
-      .filter((obj) => obj.score > 0.01); // Lower threshold for players
+      .filter((obj) => {
+        // Use enhanced viewport culling check if available
+        if (enhancedViewport) {
+          return isObjectInEnhancedViewport(obj.object, enhancedViewport);
+        }
+        
+        // Fallback to distance-based filtering
+        const distance = Math.sqrt(
+          Math.pow(obj.object.x - viewport.playerX, 2) + 
+          Math.pow(obj.object.y - viewport.playerY, 2)
+        );
+        return obj.score > 0.03 && distance <= cullingDistance;
+      })
+      .slice(0, 10); // Stricter limit for mobile optimization
 
     const scoredFoods = relevancyAgent
-      .scoreObjects(relevantFoods, viewport.playerX, viewport.playerY, "foods")
-      .filter((obj) => obj.score > 0.005); // Lower threshold for foods
+      .scoreObjects(
+        relevantFoods, 
+        queryViewport.playerX || viewport.playerX, 
+        queryViewport.playerY || viewport.playerY, 
+        "foods"
+      )
+      .filter((obj) => {
+        // Use enhanced viewport culling check if available
+        if (enhancedViewport) {
+          const inViewport = isObjectInEnhancedViewport(obj.object, enhancedViewport);
+          if (VIEWPORT_CULLING_CONFIG.DEBUG_VIEWPORT_SYNC && !inViewport) {
+            console.log(`[VIEWPORT-CULLING] Food ${obj.object.id} culled: outside enhanced viewport`);
+          }
+          return inViewport;
+        }
+        
+        // Fallback to score-based filtering
+        return obj.score > 0.01;
+      })
+      .slice(0, 20); // Reduced limit for mobile optimization
 
     const scoredDeadPoints = relevancyAgent
       .scoreObjects(
         relevantDeadPoints,
-        viewport.playerX,
-        viewport.playerY,
+        queryViewport.playerX || viewport.playerX,
+        queryViewport.playerY || viewport.playerY,
         "deadPoints"
       )
-      .filter((obj) => obj.score > 0.005); // Lower threshold for dead points
+      .filter((obj) => {
+        // Use enhanced viewport culling check if available
+        if (enhancedViewport) {
+          const inViewport = isObjectInEnhancedViewport(obj.object, enhancedViewport);
+          if (VIEWPORT_CULLING_CONFIG.DEBUG_VIEWPORT_SYNC && !inViewport) {
+            console.log(`[VIEWPORT-CULLING] DeadPoint ${obj.object.id || 'unknown'} culled: outside enhanced viewport`);
+          }
+          return inViewport;
+        }
+        
+        // Fallback to score-based filtering
+        return obj.score > 0.01;
+      })
+      .slice(0, 15); // Reduced limit for mobile optimization
 
-    // Get adaptive update frequency from network agent
+    // Enhanced adaptive update frequency with 20-30fps target
     const playerData = {
       x: viewport.playerX,
       y: viewport.playerY,
@@ -619,47 +1016,167 @@ function broadcastOptimizedGameState(
       ...relevantFoods,
       ...relevantDeadPoints,
     ];
-    const updateFreq = networkAgent.getUpdateFrequency(
+    
+    // Enhanced update frequency calculation (20-30fps target)
+    let updateFreq = networkAgent.getUpdateFrequency(
       player.id,
       playerData,
       allGameObjects,
       serverMetrics
     );
+    
+    // Enforce 20-30fps range (33-50ms intervals)
+    updateFreq = Math.max(33, Math.min(50, updateFreq));
+    
     const shouldUpdate = currentTime - (player.lastUpdate || 0) >= updateFreq;
 
     if (shouldUpdate) {
-      // Send optimized game state
-      io.to(player.socketId).emit(eventType, {
+      // Collect batched player updates from recent movements
+      const batchedUpdates = playerUpdateBatches.get(player.id) || [];
+      
+      // Create optimized game state with enhanced spatial filtering
+      const gameStateData = {
         players: scoredPlayers.map((obj) => obj.object),
         foods: scoredFoods.map((obj) => obj.object),
         deadPoints: scoredDeadPoints.map((obj) => obj.object),
         viewport: {
-          x: viewport.x,
-          y: viewport.y,
-          width: viewport.width,
-          height: viewport.height,
+          x: Math.round(viewport.x),
+          y: Math.round(viewport.y),
+          width: Math.round(viewport.width),
+          height: Math.round(viewport.height),
         },
+      };
+
+      // Store previous state for delta compression
+      const previousState = playerPreviousStates.get(player.id);
+      
+      // Use enhanced binary protocol with batching and delta compression
+      const optimizedData = binaryProtocol.createOptimizedGameState(
+        player.id,
+        gameStateData,
+        batchedUpdates,
+        previousState
+      );
+      
+      // Update previous state for next delta compression
+      playerPreviousStates.set(player.id, {
+        players: gameStateData.players.map(p => ({
+          id: p.id,
+          x: p.x,
+          y: p.y,
+          a: p.angle,
+          r: p.radius,
+          p: p.points ? p.points.slice(0, 15) : [], // Limit body points for storage
+          sp: p.spawnProtection
+        })),
+        foods: gameStateData.foods.slice(0, 30), // Limit stored foods
+        deadPoints: gameStateData.deadPoints.slice(0, 20), // Limit stored dead points
+        timestamp: currentTime
       });
+      
+      // Clear batched updates after including them
+      playerUpdateBatches.delete(player.id);
+      
+      // Send binary data with enhanced compression tracking
+      const binaryData = binaryProtocol.serialize(optimizedData);
+      io.to(player.socketId).emit('binaryGameUpdate', binaryData);
+
+      // Enhanced bandwidth tracking
+      if (!player.bandwidthStats) {
+        player.bandwidthStats = { 
+          totalBytes: 0, 
+          updateCount: 0, 
+          startTime: currentTime,
+          deltaUpdates: 0,
+          fullUpdates: 0,
+          batchedUpdates: 0,
+          spatialReductions: 0
+        };
+      }
+      player.bandwidthStats.totalBytes += binaryData.length;
+      player.bandwidthStats.updateCount++;
+      
+      // Track update types
+      if (optimizedData.type === 'delta') {
+        player.bandwidthStats.deltaUpdates++;
+      } else {
+        player.bandwidthStats.fullUpdates++;
+      }
+      
+      if (batchedUpdates.length > 0) {
+        player.bandwidthStats.batchedUpdates++;
+      }
 
       player.lastUpdate = currentTime;
 
-      // Log optimization stats
-      const originalCount =
-        connectedPlayers.length +
-        gameState.foods.length +
-        gameState.deadPoints.length;
-      const optimizedCount =
-        scoredPlayers.length + scoredFoods.length + scoredDeadPoints.length;
-      const reduction = (
-        ((originalCount - optimizedCount) / originalCount) *
-        100
-      ).toFixed(1);
+      // Enhanced logging with spatial and batch metrics (reduced frequency)
+      if (Math.random() < 0.03) { // Only log 3% of updates to reduce spam
+        const originalCount =
+          connectedPlayers.length +
+          gameState.foods.length +
+          gameState.deadPoints.length;
+        const optimizedCount =
+          scoredPlayers.length + scoredFoods.length + scoredDeadPoints.length;
+        const spatialReduction = originalCount > 0 ? (
+          ((originalCount - optimizedCount) / originalCount) * 100
+        ).toFixed(1) : 0;
+        
+        const binaryStats = binaryProtocol.getStats();
+        const timeElapsed = (currentTime - player.bandwidthStats.startTime) / 1000;
+        const bytesPerSecond = timeElapsed > 0 ? player.bandwidthStats.totalBytes / timeElapsed : 0;
+        const deltaRatio = player.bandwidthStats.updateCount > 0 
+          ? (player.bandwidthStats.deltaUpdates / player.bandwidthStats.updateCount * 100).toFixed(1)
+          : 0;
+        const batchRatio = player.bandwidthStats.updateCount > 0 
+          ? (player.bandwidthStats.batchedUpdates / player.bandwidthStats.updateCount * 100).toFixed(1)
+          : 0;
 
-      console.log(
-        `🚀 Optimized update for ${player.id}: ${originalCount} → ${optimizedCount} objects (${reduction}% reduction)`
-      );
+        console.log(
+          `🚀 Enhanced Network Update [${player.id}]:`, {
+            spatial: `${spatialReduction}% reduction (${originalCount}→${optimizedCount})`,
+            binary: `${binaryStats.compressionRatio.toFixed(1)}% compression`,
+            deltas: `${deltaRatio}% delta updates`,
+            batches: `${batchRatio}% batched updates`,
+            bandwidth: `${(bytesPerSecond / 1024).toFixed(1)} KB/s`,
+            updateFreq: `${updateFreq}ms (${(1000/updateFreq).toFixed(1)}fps)`,
+            updateType: optimizedData.type
+          }
+        );
+      }
     }
   });
+}
+
+// Enhanced batch update system for player movements with delta compression
+function addPlayerUpdateToBatch(playerId, updateData) {
+  if (!playerUpdateBatches.has(playerId)) {
+    playerUpdateBatches.set(playerId, []);
+  }
+  
+  const batch = playerUpdateBatches.get(playerId);
+  const previousState = playerPreviousStates.get(playerId);
+  
+  // Enhanced update data with previous state for delta compression
+  const enhancedUpdate = {
+    ...updateData,
+    timestamp: Date.now(),
+    // Include previous state data for delta compression
+    prevX: previousState?.players?.find(p => p.id === playerId)?.x,
+    prevY: previousState?.players?.find(p => p.id === playerId)?.y,
+    prevAngle: previousState?.players?.find(p => p.id === playerId)?.a
+  };
+  
+  batch.push(enhancedUpdate);
+  
+  // Reduced batch size for better responsiveness
+  if (batch.length > BATCH_SIZE) {
+    batch.shift(); // Remove oldest update
+  }
+  
+  // Auto-flush old batches with enhanced filtering
+  const now = Date.now();
+  const filteredBatch = batch.filter(update => now - update.timestamp < BATCH_TIMEOUT);
+  playerUpdateBatches.set(playerId, filteredBatch);
 }
 
 // Update spatial partitioning with current game objects
@@ -924,20 +1441,55 @@ let gameLoopInterval;
 function startOptimizedGameLoop() {
   if (gameLoopInterval) clearInterval(gameLoopInterval);
 
-  gameLoopInterval = setInterval(() => {
-    // Check for stuck players (bots and humans)
-    checkForStuckPlayers();
+  // Update adaptive FPS
+  updateAdaptiveFPS();
 
-    // Broadcast optimized game state to all players
+  gameLoopInterval = setInterval(() => {
+    // Update adaptive FPS periodically
+    const now = Date.now();
+    if (now - lastFPSUpdate > FPS_UPDATE_INTERVAL) {
+      updateAdaptiveFPS();
+      lastFPSUpdate = now;
+    }
+
+    // Check for stuck players (bots and humans)
+    if (gameState.players.size > 0 && Array.from(gameState.players.values()).some(p => !p.isBot)) {
+      checkForStuckPlayers();
+    }
+
+    // Broadcast optimized game state to all players with rate limiting
     broadcastOptimizedGameState(null, "gameUpdate");
 
     // Update predictive agent predictions
     predictiveAgent.updatePredictions();
-  }, 1000 / RENDER_FPS);
+
+    // Clean up rate limiting data periodically
+    if (now % 30000 < 100) { // Every ~30 seconds
+      cleanupPlayerRateLimits();
+    }
+  }, 1000 / currentRenderFPS);
 
   console.log(
-    "🎮 Optimized game loop started at 30 FPS with universal stuck detection"
+    `🎮 Optimized game loop started at ${currentRenderFPS} FPS with adaptive rate limiting`
   );
+}
+
+// Update adaptive FPS and restart game loop if needed
+function updateAdaptiveFPS() {
+  const newFPS = calculateAdaptiveFPS();
+  
+  if (newFPS !== currentRenderFPS) {
+    const oldFPS = currentRenderFPS;
+    currentRenderFPS = newFPS;
+    
+    console.log(`📊 FPS adjusted: ${oldFPS} → ${currentRenderFPS} (${gameState.players.size} players)`);
+    
+    // Restart game loop with new interval
+    if (gameLoopInterval) {
+      clearInterval(gameLoopInterval);
+      startOptimizedGameLoop();
+    }
+  }
 }
 
 // Start the optimized game loop
@@ -994,7 +1546,7 @@ function getPointValueByType(type) {
     case "orange":
       return 12;
     case "grapes":
-      return 350;
+      return 15;
     default:
       return POINT;
   }
@@ -3521,7 +4073,7 @@ io.on("connection", (socket) => {
     }
   });
 
-  // Handle viewport updates from client
+  // Handle viewport updates from client - ENHANCED WITH VALIDATION
   socket.on("viewportUpdate", (data) => {
     const { playerId, viewport } = data;
     const player = gameState.players.get(playerId);
@@ -3529,15 +4081,35 @@ io.on("connection", (socket) => {
     if (player && player.alive && viewport) {
       const { x, y, width, height, playerX, playerY } = viewport;
 
-      // Store client viewport bounds
+      // Validate viewport dimensions against client constraints
+      const isValidViewport = validateViewportBounds(viewport);
+      
+      if (!isValidViewport) {
+        if (VIEWPORT_CULLING_CONFIG.DEBUG_VIEWPORT_SYNC) {
+          console.warn(
+            `⚠️ Invalid viewport from ${playerId}: ${width}x${height} (min: ${MIN_VIEWPORT_WIDTH}x${MIN_VIEWPORT_HEIGHT})`
+          );
+        }
+        return; // Reject invalid viewport data
+      }
+
+      // Calculate enhanced viewport bounds with server-side safety margins
+      const enhancedViewport = calculateEnhancedViewportBounds(viewport);
+
+      // Store client viewport bounds with enhanced data
       clientViewports.set(playerId, {
-        x,
-        y,
-        width,
-        height,
+        x: enhancedViewport.x,
+        y: enhancedViewport.y,
+        width: enhancedViewport.width,
+        height: enhancedViewport.height,
         playerX,
         playerY,
         timestamp: Date.now(),
+        // Store original client viewport for comparison
+        originalViewport: { x, y, width, height },
+        // Add culling parameters
+        cullingDistance: enhancedViewport.cullingDistance,
+        renderDistance: enhancedViewport.renderDistance,
       });
 
       // Update predictive agent with player movement
@@ -3548,11 +4120,15 @@ io.on("connection", (socket) => {
         Date.now()
       );
 
-      console.log(
-        `🔍 Viewport updated for ${playerId}: (${x?.toFixed(1) || "N/A"}, ${
-          y?.toFixed(1) || "N/A"
-        }) ${width?.toFixed(1) || "N/A"}x${height?.toFixed(1) || "N/A"}`
-      );
+      if (VIEWPORT_CULLING_CONFIG.DEBUG_VIEWPORT_SYNC) {
+        console.log(
+          `🔍 Viewport updated for ${playerId}: Original(${x?.toFixed(1) || "N/A"}, ${
+            y?.toFixed(1) || "N/A"
+          }) ${width?.toFixed(1) || "N/A"}x${height?.toFixed(1) || "N/A"} → Enhanced(${enhancedViewport.x?.toFixed(1)}, ${
+            enhancedViewport.y?.toFixed(1)
+          }) ${enhancedViewport.width?.toFixed(1)}x${enhancedViewport.height?.toFixed(1)}`
+        );
+      }
     }
   });
 

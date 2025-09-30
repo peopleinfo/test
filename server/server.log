@@ -1,23 +1,279 @@
-🗂️ Spatial Partitioning Agent initialized: 12x8 grid (100px cells)
-📊 Relevancy Scoring Agent initialized
-🔮 Predictive Culling Agent initialized
-🌐 Network Adaptation Agent initialized
-🚀 Network optimization agents initialized
-📊 Spatial partitioning: undefinedxundefined cells
-🎮 Optimized game loop started at 30 FPS with universal stuck detection
 🍎 Initializing 300 food items in 1200x800 world...
-🍎 Food 0: position (502.58, 390.85) color: orange
-🍎 Food 1: position (161.78, 600.63) color: green
-🍎 Food 2: position (703.39, 67.24) color: darkred
-🍎 Food 3: position (442.47, 744.62) color: green
-🍎 Food 4: position (997.69, 503.43) color: orange
+🍎 Food 0: position (959.61, 372.36) color: red
+🍎 Food 1: position (622.27, 534.82) color: yellow
+🍎 Food 2: position (1159.57, 690.60) color: darkred
+🍎 Food 3: position (276.66, 243.23) color: red
+🍎 Food 4: position (293.44, 789.63) color: orange
 🍎 Food initialization complete: 300 foods spawned
-🗂️ Spatial partitioning updated with 300 foods
+🎮 Game initialized: 300 foods spawned in 1200x800 world
 🤖 BOT: Starting intervals - Update: 100ms, Maintenance: 5000ms (State: active)
 📊 Performance metrics logging started (30s intervals)
 Server running on port 9000
 Game available at http://localhost:9000
 Health check available at http://localhost:9000/health
 🤖 Spawning initial bots for game testing...
-🤖 QUEUE: Added 5 bots to spawn queue (total queued: 5)
-🤖 SPAWN: Started bot spawn interval (5000ms)
+🎯 DEBUG: Finding safe spawn position for radius 4
+🎯 DEBUG: Generated 16 spawn zones with proper distribution:
+🎯 DEBUG: X range: 120 - 1080 (spread: 960px)
+🎯 DEBUG: Y range: 120 - 680 (spread: 560px)
+🎯 DEBUG: Zone positions: Zone0: (128, 120), Zone1: (422, 123), Zone2: (775, 120), Zone3: (1061, 120), Zone4: (133, 302), Zone5: (427, 300), Zone6: (747, 313), Zone7: (1080, 317), Zone8: (136, 490), Zone9: (460, 497), Zone10: (766, 487), Zone11: (1069, 501), Zone12: (120, 680), Zone13: (448, 671), Zone14: (754, 669), Zone15: (1069, 680)
+🎯 DEBUG: Zone priority order: Zone0(128,120):0players, Zone1(422,123):0players, Zone2(775,120):0players, Zone3(1061,120):0players, Zone4(133,302):0players, Zone5(427,300):0players, Zone6(747,313):0players, Zone7(1080,317):0players, Zone8(136,490):0players, Zone9(460,497):0players, Zone10(766,487):0players, Zone11(1069,501):0players, Zone12(120,680):0players, Zone13(448,671):0players, Zone14(754,669):0players, Zone15(1069,680):0players
+🎯 DEBUG: Trying spawn zone 0 at center (128, 120) with 0 nearby players
+🔍 DEBUG: Checking position safety at (171.47, 74.03) with 0 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too close to boundaries
+🔍 DEBUG: Checking position safety at (93.14, 119.44) with 0 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (69.65, 141.49) with 0 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too close to boundaries
+🔍 DEBUG: Checking position safety at (173.66, 157.03) with 0 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (169.90, 60.00) with 0 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too close to boundaries
+🔍 DEBUG: Checking position safety at (69.81, 101.18) with 0 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too close to boundaries
+🔍 DEBUG: Checking position safety at (96.83, 91.41) with 0 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (198.56, 121.06) with 0 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (117.73, 125.82) with 0 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (169.14, 190.09) with 0 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (122.28, 166.55) with 0 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (186.93, 87.02) with 0 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (157.66, 107.90) with 0 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (103.92, 181.05) with 0 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (154.33, 167.79) with 0 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (138.79, 166.07) with 0 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (199.20, 96.50) with 0 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (190.66, 173.07) with 0 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (113.08, 132.04) with 0 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (118.81, 64.23) with 0 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too close to boundaries
+🔍 DEBUG: Checking position safety at (122.82, 143.70) with 0 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (123.30, 163.25) with 0 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (138.03, 60.00) with 0 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too close to boundaries
+🔍 DEBUG: Checking position safety at (118.80, 136.24) with 0 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (172.05, 126.37) with 0 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (71.87, 182.63) with 0 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too close to boundaries
+🔍 DEBUG: Checking position safety at (132.76, 104.51) with 0 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (171.92, 90.14) with 0 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (145.34, 116.24) with 0 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (106.38, 184.97) with 0 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (116.62, 185.22) with 0 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (129.62, 128.72) with 0 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (95.64, 116.04) with 0 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (173.02, 60.00) with 0 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too close to boundaries
+🔍 DEBUG: Checking position safety at (100.29, 63.98) with 0 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too close to boundaries
+🔍 DEBUG: Checking position safety at (152.92, 111.85) with 0 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (146.54, 99.62) with 0 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (181.53, 125.40) with 0 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (102.33, 169.31) with 0 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (167.53, 126.76) with 0 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (127.52, 127.62) with 0 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (179.61, 60.00) with 0 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too close to boundaries
+🔍 DEBUG: Checking position safety at (191.62, 84.53) with 0 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (157.09, 119.91) with 0 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (60.14, 185.77) with 0 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too close to boundaries
+🔍 DEBUG: Checking position safety at (131.25, 108.99) with 0 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (63.80, 87.53) with 0 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too close to boundaries
+🔍 DEBUG: Checking position safety at (70.66, 70.25) with 0 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too close to boundaries
+🔍 DEBUG: Checking position safety at (82.93, 91.69) with 0 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (88.78, 77.10) with 0 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too close to boundaries
+❌ DEBUG: Zone 0 failed after 50 attempts
+🎯 DEBUG: Trying spawn zone 1 at center (422, 123) with 0 nearby players
+🔍 DEBUG: Checking position safety at (428.00, 124.47) with 0 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (416.95, 60.00) with 0 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too close to boundaries
+🔍 DEBUG: Checking position safety at (424.19, 91.46) with 0 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (408.05, 122.84) with 0 alive players, minDistance: 200px
+✅ DEBUG: Position is safe at (408.05, 122.84) with 3 clear directions
+✅ DEBUG: Found safe position in zone 1 at (408.05, 122.84) after 4 attempts
+🤖 DEBUG: Creating bot bot-yfj292lx9 at position (408.05, 122.84) with safe angle 1.282 radians (73.5°)
+🛡️ DEBUG: Bot bot-yfj292lx9 spawn protection enabled until 8:35:30 AM
+✅ DEBUG: Bot bot-yfj292lx9 created successfully with 20 body points
+Bot spawned: bot-yfj292lx9 at position (408.05, 122.84)
+🎯 DEBUG: Finding safe spawn position for radius 4
+🎯 DEBUG: Generated 16 spawn zones with proper distribution:
+🎯 DEBUG: X range: 120 - 1080 (spread: 960px)
+🎯 DEBUG: Y range: 120 - 680 (spread: 560px)
+🎯 DEBUG: Zone positions: Zone0: (120, 120), Zone1: (436, 120), Zone2: (780, 120), Zone3: (1080, 126), Zone4: (122, 312), Zone5: (459, 311), Zone6: (771, 302), Zone7: (1080, 294), Zone8: (120, 507), Zone9: (444, 477), Zone10: (744, 473), Zone11: (1080, 491), Zone12: (120, 680), Zone13: (444, 680), Zone14: (750, 674), Zone15: (1067, 680)
+🎯 DEBUG: Zone priority order: Zone2(780,120):0players, Zone3(1080,126):0players, Zone4(122,312):0players, Zone6(771,302):0players, Zone7(1080,294):0players, Zone8(120,507):0players, Zone9(444,477):0players, Zone10(744,473):0players, Zone11(1080,491):0players, Zone12(120,680):0players, Zone13(444,680):0players, Zone14(750,674):0players, Zone15(1067,680):0players, Zone0(120,120):1players, Zone1(436,120):1players, Zone5(459,311):1players
+🎯 DEBUG: Trying spawn zone 2 at center (780, 120) with 0 nearby players
+🔍 DEBUG: Checking position safety at (846.09, 60.00) with 1 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too close to boundaries
+🔍 DEBUG: Checking position safety at (846.65, 60.00) with 1 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too close to boundaries
+🔍 DEBUG: Checking position safety at (795.24, 180.24) with 1 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (739.19, 161.54) with 1 alive players, minDistance: 200px
+✅ DEBUG: Position is safe at (739.19, 161.54) with 3 clear directions
+✅ DEBUG: Found safe position in zone 2 at (739.19, 161.54) after 4 attempts
+🤖 DEBUG: Creating bot bot-gz2xa2fsp at position (739.19, 161.54) with safe angle 2.393 radians (137.1°)
+🛡️ DEBUG: Bot bot-gz2xa2fsp spawn protection enabled until 8:35:30 AM
+✅ DEBUG: Bot bot-gz2xa2fsp created successfully with 20 body points
+Bot spawned: bot-gz2xa2fsp at position (739.19, 161.54)
+🎯 DEBUG: Finding safe spawn position for radius 4
+🎯 DEBUG: Generated 16 spawn zones with proper distribution:
+🎯 DEBUG: X range: 120 - 1079 (spread: 959px)
+🎯 DEBUG: Y range: 120 - 680 (spread: 560px)
+🎯 DEBUG: Zone positions: Zone0: (126, 139), Zone1: (438, 138), Zone2: (758, 120), Zone3: (1068, 120), Zone4: (137, 314), Zone5: (448, 299), Zone6: (744, 312), Zone7: (1072, 314), Zone8: (120, 498), Zone9: (425, 492), Zone10: (767, 475), Zone11: (1069, 495), Zone12: (120, 674), Zone13: (427, 680), Zone14: (757, 672), Zone15: (1079, 672)
+🎯 DEBUG: Zone priority order: Zone3(1068,120):0players, Zone4(137,314):0players, Zone7(1072,314):0players, Zone8(120,498):0players, Zone9(425,492):0players, Zone10(767,475):0players, Zone11(1069,495):0players, Zone12(120,674):0players, Zone13(427,680):0players, Zone14(757,672):0players, Zone15(1079,672):0players, Zone0(126,139):1players, Zone1(438,138):1players, Zone2(758,120):1players, Zone5(448,299):1players, Zone6(744,312):1players
+🎯 DEBUG: Trying spawn zone 3 at center (1068, 120) with 0 nearby players
+🔍 DEBUG: Checking position safety at (1120.74, 97.75) with 2 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too close to boundaries
+🔍 DEBUG: Checking position safety at (1080.31, 109.32) with 2 alive players, minDistance: 200px
+✅ DEBUG: Position is safe at (1080.31, 109.32) with 2 clear directions
+✅ DEBUG: Found safe position in zone 3 at (1080.31, 109.32) after 2 attempts
+🤖 DEBUG: Creating bot bot-wyy2lg9tj at position (1080.31, 109.32) with safe angle 2.374 radians (136.0°)
+🛡️ DEBUG: Bot bot-wyy2lg9tj spawn protection enabled until 8:35:30 AM
+✅ DEBUG: Bot bot-wyy2lg9tj created successfully with 20 body points
+Bot spawned: bot-wyy2lg9tj at position (1080.31, 109.32)
+🎯 DEBUG: Finding safe spawn position for radius 4
+🎯 DEBUG: Generated 16 spawn zones with proper distribution:
+🎯 DEBUG: X range: 120 - 1080 (spread: 960px)
+🎯 DEBUG: Y range: 120 - 680 (spread: 560px)
+🎯 DEBUG: Zone positions: Zone0: (124, 120), Zone1: (433, 131), Zone2: (760, 136), Zone3: (1073, 120), Zone4: (120, 322), Zone5: (433, 317), Zone6: (743, 293), Zone7: (1071, 299), Zone8: (124, 502), Zone9: (457, 490), Zone10: (770, 488), Zone11: (1080, 487), Zone12: (138, 680), Zone13: (427, 680), Zone14: (740, 674), Zone15: (1080, 661)
+🎯 DEBUG: Zone priority order: Zone4(120,322):0players, Zone8(124,502):0players, Zone9(457,490):0players, Zone10(770,488):0players, Zone11(1080,487):0players, Zone12(138,680):0players, Zone13(427,680):0players, Zone14(740,674):0players, Zone15(1080,661):0players, Zone0(124,120):1players, Zone1(433,131):1players, Zone2(760,136):1players, Zone3(1073,120):1players, Zone5(433,317):1players, Zone6(743,293):1players, Zone7(1071,299):1players
+🎯 DEBUG: Trying spawn zone 4 at center (120, 322) with 0 nearby players
+🔍 DEBUG: Checking position safety at (180.40, 322.07) with 3 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (78.45, 305.91) with 3 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too close to boundaries
+🔍 DEBUG: Checking position safety at (143.35, 313.29) with 3 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (79.63, 351.94) with 3 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too close to boundaries
+🔍 DEBUG: Checking position safety at (84.60, 267.33) with 3 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (83.60, 254.62) with 3 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (123.21, 359.31) with 3 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (142.05, 341.91) with 3 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (172.89, 282.00) with 3 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (119.53, 373.30) with 3 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (100.80, 391.16) with 3 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (79.14, 379.23) with 3 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too close to boundaries
+🔍 DEBUG: Checking position safety at (171.93, 285.77) with 3 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (141.22, 347.88) with 3 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (143.33, 369.05) with 3 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (61.70, 383.20) with 3 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too close to boundaries
+🔍 DEBUG: Checking position safety at (77.13, 333.47) with 3 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too close to boundaries
+🔍 DEBUG: Checking position safety at (115.49, 251.60) with 3 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (63.75, 286.18) with 3 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too close to boundaries
+🔍 DEBUG: Checking position safety at (169.40, 389.18) with 3 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (75.44, 373.85) with 3 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too close to boundaries
+🔍 DEBUG: Checking position safety at (75.42, 347.98) with 3 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too close to boundaries
+🔍 DEBUG: Checking position safety at (140.11, 377.39) with 3 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (158.24, 279.07) with 3 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (64.30, 370.29) with 3 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too close to boundaries
+🔍 DEBUG: Checking position safety at (67.90, 270.05) with 3 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too close to boundaries
+🔍 DEBUG: Checking position safety at (119.04, 376.79) with 3 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (60.00, 269.14) with 3 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too close to boundaries
+🔍 DEBUG: Checking position safety at (60.00, 285.85) with 3 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too close to boundaries
+🔍 DEBUG: Checking position safety at (170.89, 378.91) with 3 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (60.00, 371.12) with 3 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too close to boundaries
+🔍 DEBUG: Checking position safety at (81.71, 370.62) with 3 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (168.68, 338.14) with 3 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (187.93, 337.85) with 3 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (124.55, 366.92) with 3 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (136.86, 340.61) with 3 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (82.71, 331.32) with 3 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (87.23, 286.59) with 3 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (189.51, 355.28) with 3 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (166.08, 250.36) with 3 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (60.00, 377.59) with 3 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too close to boundaries
+🔍 DEBUG: Checking position safety at (125.04, 321.86) with 3 alive players, minDistance: 200px
+❌ DEBUG: Position unsafe - too many nearby foods (3)
+🔍 DEBUG: Checking position safety at (100.13, 254.65) with 3 alive players, minDistance: 200px
+✅ DEBUG: Position is safe at (100.13, 254.65) with 3 clear directions
+✅ DEBUG: Found safe position in zone 4 at (100.13, 254.65) after 43 attempts
+🤖 DEBUG: Creating bot bot-1m7m2taph at position (100.13, 254.65) with safe angle 0.449 radians (25.7°)
+🛡️ DEBUG: Bot bot-1m7m2taph spawn protection enabled until 8:35:30 AM
+✅ DEBUG: Bot bot-1m7m2taph created successfully with 20 body points
+Bot spawned: bot-1m7m2taph at position (100.13, 254.65)
+Bot spawning complete: 4 spawned, 4/4 total, 4 alive
+🔐 Socket authentication attempt: {
+  socketId: 'JCS6cwlRp-nGOgDVAAAB',
+  hasToken: true,
+  hasUserData: true,
+  isLoggedIn: true
+}
+✅ Socket authenticated successfully: JCS6cwlRp-nGOgDVAAAB
+Player connected: JCS6cwlRp-nGOgDVAAAB
