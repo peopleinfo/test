@@ -178,8 +178,8 @@ const WORLD_WIDTH = config.WORLD_WIDTH;
 const WORLD_HEIGHT = config.WORLD_HEIGHT;
 
 // Viewport Configuration - SYNC WITH CLIENT gameConfig.ts
-const MIN_VIEWPORT_WIDTH = WORLD_WIDTH * 1.5;
-const MIN_VIEWPORT_HEIGHT = WORLD_HEIGHT * 1.5;
+const MIN_VIEWPORT_WIDTH = WORLD_WIDTH * 1.2;
+const MIN_VIEWPORT_HEIGHT = WORLD_HEIGHT * 1.2;
 const MIN_VIEWPORT_SAFETY_MARGIN_X = 100; // Extra horizontal padding
 const MIN_VIEWPORT_SAFETY_MARGIN_Y = 50; // Extra vertical padding
 
