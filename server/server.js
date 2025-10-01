@@ -1,6 +1,11 @@
 const express = require("express");
 const http = require("http");
+const https = require("https");
+const fs = require("fs");
 const socketIo = require("socket.io");
+
+// Load environment configuration
+const config = require("./config/env");
 
 // Import optimization agents
 const {
@@ -14,11 +19,34 @@ const { NetworkAdaptationAgent } = require("./agents/NetworkAdaptationAgent");
 const BinaryProtocol = require("./utils/binaryProtocol");
 
 const app = express();
-const server = http.createServer(app);
+
+// Create HTTP server
+const httpServer = http.createServer(app);
+
+// Create HTTPS server if SSL is enabled
+let httpsServer = null;
+if (config.SSL_ENABLED) {
+  try {
+    const sslOptions = {
+      key: fs.readFileSync(config.SSL_KEY_PATH),
+      cert: fs.readFileSync(config.SSL_CERT_PATH),
+    };
+    httpsServer = https.createServer(sslOptions, app);
+    console.log("✅ SSL certificates loaded successfully");
+  } catch (error) {
+    console.error("❌ Failed to load SSL certificates:", error.message);
+    console.log("🔄 Falling back to HTTP only");
+    config.SSL_ENABLED = false;
+  }
+}
+
+// Use the appropriate server for Socket.IO
+const server = config.SSL_ENABLED ? httpsServer : httpServer;
+
 const io = socketIo(server, {
   cors: {
-    origin: "*",
-    methods: ["GET", "POST"],
+    origin: config.CORS_ORIGIN,
+    methods: config.CORS_METHODS,
   },
   transports: ["websocket"],
   // transports: ["websocket", "polling"],
@@ -39,10 +67,10 @@ const io = socketIo(server, {
     },
   },
   // Connection optimization
-  pingTimeout: 60000,
-  pingInterval: 25000,
+  pingTimeout: config.SOCKET_PING_TIMEOUT,
+  pingInterval: config.SOCKET_PING_INTERVAL,
   upgradeTimeout: 10000,
-  maxHttpBufferSize: 1e6, // 1MB max message size
+  maxHttpBufferSize: config.SOCKET_MAX_HTTP_BUFFER_SIZE,
 });
 
 // Token validation utility
@@ -56,25 +84,45 @@ function validateToken(token) {
     return { valid: false, reason: "Invalid token format" };
   }
 
-  // For now, we'll accept any properly formatted token
-  // In production, you would validate against your auth service
-  return { valid: true, token };
+  // Validate token with MOS API
+  return fetch(`${config.MOS_API_URL}/user/snakeZone/getUserInfo`, {
+    method: "post",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+  })
+    .then((response) => {
+      if (response.ok) {
+        return response.json();
+      } else {
+        throw new Error("Token validation failed");
+      }
+    })
+    .then((data) => {
+      console.log("✅ server validate token:", data);
+      return { valid: true, token, data };
+    })
+    .catch((error) => {
+      console.log("❌ Token validation failed:", error.message);
+      return { valid: false, reason: error.message };
+    });
 }
 
 // Socket authentication middleware
-io.use((socket, next) => {
+io.use(async (socket, next) => {
   const token = socket.handshake.auth.token;
   const userData = socket.handshake.auth.userData;
 
-  console.log("🔐 Socket authentication attempt:", {
-    socketId: socket.id,
-    hasToken: !!token,
-    hasUserData: !!userData,
-    isLoggedIn: userData?.isLoggedIn,
-  });
+  // console.log("🔐 Socket authentication attempt:", {
+  //   socketId: socket.id,
+  //   hasToken: !!token,
+  //   hasUserData: !!userData,
+  //   isLoggedIn: userData?.isLoggedIn,
+  // });
 
   if (token) {
-    const validation = validateToken(token);
+    const validation = await validateToken(token);
     if (validation.valid) {
       // Store authenticated user info in socket data
       socket.data.isAuthenticated = true;
@@ -82,7 +130,7 @@ io.use((socket, next) => {
       socket.data.userData = userData;
       socket.data.openId = userData?.openId;
       socket.data.userInfo = userData?.userInfo;
-      console.log("✅ Socket authenticated successfully:", socket.id);
+      // console.log("✅ Socket authenticated successfully:", socket.id);
 
       // Emit authentication success after connection
       socket.on("connect", () => {
@@ -92,6 +140,7 @@ io.use((socket, next) => {
           userInfo: userData?.userInfo,
         });
       });
+      next(); // Always allow connection, but track auth status
     } else {
       console.log("❌ Token validation failed:", validation.reason);
       // Allow connection but mark as unauthenticated
@@ -106,21 +155,27 @@ io.use((socket, next) => {
       });
     }
   } else {
+    if (config.isDevelopment()) {
+      next(); // Always allow connection, but track auth status
+      return;
+    }
+    socket.emit("auth_error", {
+      error: "No token provided",
+      reason: "No token provided",
+    });
     // Allow Player connections
     socket.data.isAuthenticated = false;
-    console.log("👤 Player connection allowed:", socket.id);
+    // console.log("👤 Player connection allowed:", socket.id);
   }
-
-  next(); // Always allow connection, but track auth status
 });
 
-const MIN_PLAYERS_FOR_BATTLE = 3;
-const MAX_BOTS = MIN_PLAYERS_FOR_BATTLE;
+const MIN_PLAYERS_FOR_BATTLE = config.MIN_PLAYERS_FOR_BATTLE;
+const MAX_BOTS = config.MAX_BOTS;
 const POINT = 3; // Points awarded for eating food or dead points
 const FOOD_RADIUS = 5.5;
 
-const WORLD_WIDTH = 1200;
-const WORLD_HEIGHT = 800;
+const WORLD_WIDTH = config.WORLD_WIDTH;
+const WORLD_HEIGHT = config.WORLD_HEIGHT;
 
 // Viewport Configuration - SYNC WITH CLIENT gameConfig.ts
 const MIN_VIEWPORT_WIDTH = WORLD_WIDTH * 1.5;
@@ -131,18 +186,18 @@ const MIN_VIEWPORT_SAFETY_MARGIN_Y = 50; // Extra vertical padding
 // Viewport Culling Configuration - SYNC WITH CLIENT ViewportOptimizer
 const VIEWPORT_CULLING_CONFIG = {
   SAFETY_MARGIN_MULTIPLIER: 0.15, // 15% safety margin (matches client)
-  MIN_SAFETY_MARGIN_X: 20,
+  MIN_SAFETY_MARGIN_X: 50,
   MIN_SAFETY_MARGIN_Y: 20,
   VIEWPORT_PADDING_MULTIPLIER: 1.2, // Extra padding for server-side culling
   DEBUG_VIEWPORT_SYNC: true, // Enable debug logging for viewport sync
 };
 
-// ===== ADAPTIVE RATE LIMITING CONFIGURATION =====
+// ===== ENHANCED ADAPTIVE RATE LIMITING CONFIGURATION FOR MOBILE =====
 const RATE_LIMITING_CONFIG = {
-  // Base FPS settings
-  MIN_FPS: 20, // Minimum 10 FPS (100ms intervals)
-  MAX_FPS: 50, // Maximum 50 FPS (20ms intervals)
-  BASE_FPS: 30, // Default 30 FPS (33ms intervals)
+  // Base FPS settings - optimized for mobile thermal management
+  MIN_FPS: 15, // Reduced from 20 for better thermal management
+  MAX_FPS: 35, // Reduced from 50 for mobile devices
+  BASE_FPS: 25, // Reduced from 30 for mobile optimization
 
   // Player count thresholds for adaptive FPS
   PLAYER_THRESHOLDS: {
@@ -152,32 +207,60 @@ const RATE_LIMITING_CONFIG = {
     VERY_HIGH: 15, // 11+ players: minimum FPS
   },
 
-  // FPS adjustments based on player count
+  // FPS adjustments based on player count - optimized for mobile
   FPS_BY_PLAYER_COUNT: {
-    LOW: 40, // 1-2 players: 40 FPS
-    MEDIUM: 30, // 3-5 players: 30 FPS
-    HIGH: 20, // 6-10 players: 20 FPS
-    VERY_HIGH: 15, // 11+ players: 15 FPS
+    LOW: 30, // Reduced from 40 for mobile thermal management
+    MEDIUM: 25, // Reduced from 30
+    HIGH: 20, // Kept at 20
+    VERY_HIGH: 15, // Kept at 15
   },
 
-  // Network condition adjustments
+  // Network condition adjustments - more aggressive for mobile
   NETWORK_ADJUSTMENT: {
     GOOD: 1.0, // No adjustment
-    MODERATE: 0.8, // 20% reduction
-    POOR: 0.6, // 40% reduction
+    MODERATE: 0.7, // Increased reduction from 0.8 to 0.7
+    POOR: 0.5, // Increased reduction from 0.6 to 0.5
   },
 
-  // Rate limiting per player
+  // Enhanced rate limiting per player for mobile devices
   PER_PLAYER_LIMITS: {
-    MAX_UPDATES_PER_SEC: 30, // Maximum 30 updates per second per player
-    BURST_LIMIT: 5, // Allow 5 updates in burst
+    MAX_UPDATES_PER_SEC: 25, // Reduced from 30 for mobile thermal management
+    BURST_LIMIT: 3, // Reduced from 5 for better throttling
     BURST_WINDOW: 1000, // 1 second burst window
-    THROTTLE_THRESHOLD: 50, // Throttle after 50 updates/sec
+    THROTTLE_THRESHOLD: 40, // Reduced from 50 for earlier throttling
+
+    // Mobile-specific thermal throttling
+    THERMAL_MAX_UPDATES: 15, // Maximum updates during thermal throttling
+    BATTERY_SAVER_UPDATES: 12, // Maximum updates in battery saver mode
+  },
+
+  // Adaptive update frequency based on device performance
+  MOBILE_PERFORMANCE_TIERS: {
+    HIGH_PERFORMANCE: {
+      maxFPS: 30,
+      updateInterval: 33, // ~30 FPS
+      compressionLevel: "standard",
+    },
+    MEDIUM_PERFORMANCE: {
+      maxFPS: 25,
+      updateInterval: 40, // ~25 FPS
+      compressionLevel: "enhanced",
+    },
+    LOW_PERFORMANCE: {
+      maxFPS: 20,
+      updateInterval: 50, // ~20 FPS
+      compressionLevel: "aggressive",
+    },
+    THERMAL_THROTTLED: {
+      maxFPS: 15,
+      updateInterval: 67, // ~15 FPS
+      compressionLevel: "maximum",
+    },
   },
 };
 
 // Dynamic FPS calculation
-let currentRenderFPS = RATE_LIMITING_CONFIG.BASE_FPS;
+let currentRenderFPS = config.BASE_FPS;
 let lastFPSUpdate = Date.now();
 const FPS_UPDATE_INTERVAL = 3000; // Update FPS every 5 seconds
 
@@ -232,8 +315,8 @@ function calculateAdaptiveFPS() {
   return targetFPS;
 }
 
-// Check if player should receive update (rate limiting)
-function shouldSendUpdateToPlayer(playerId) {
+// Enhanced player rate limiting with mobile thermal management
+function shouldSendUpdateToPlayer(playerId, clientPerformanceHint = null) {
   const now = Date.now();
   const limits = RATE_LIMITING_CONFIG.PER_PLAYER_LIMITS;
 
@@ -244,12 +327,56 @@ function shouldSendUpdateToPlayer(playerId) {
       burstCount: 0,
       burstStart: now,
       throttled: false,
+      performanceTier: "HIGH_PERFORMANCE", // Default to high performance
+      thermalThrottling: false,
+      batteryOptimization: false,
     });
   }
 
   const playerLimit = playerRateLimits.get(playerId);
+
+  // Update performance tier based on client hints
+  if (clientPerformanceHint) {
+    if (
+      clientPerformanceHint.thermalState === "critical" ||
+      clientPerformanceHint.thermalState === "fair"
+    ) {
+      playerLimit.performanceTier = "THERMAL_THROTTLED";
+      playerLimit.thermalThrottling = true;
+    } else if (
+      clientPerformanceHint.batteryLevel < 20 &&
+      !clientPerformanceHint.charging
+    ) {
+      playerLimit.performanceTier = "LOW_PERFORMANCE";
+      playerLimit.batteryOptimization = true;
+    } else if (
+      clientPerformanceHint.fps < 20 ||
+      clientPerformanceHint.frameTime > 50
+    ) {
+      playerLimit.performanceTier = "MEDIUM_PERFORMANCE";
+    } else {
+      playerLimit.performanceTier = "HIGH_PERFORMANCE";
+      playerLimit.thermalThrottling = false;
+      playerLimit.batteryOptimization = false;
+    }
+  }
+
+  // Get performance tier configuration
+  const tierConfig =
+    RATE_LIMITING_CONFIG.MOBILE_PERFORMANCE_TIERS[playerLimit.performanceTier];
+
+  // Determine max updates per second based on performance tier and thermal state
+  let maxUpdatesPerSec = limits.MAX_UPDATES_PER_SEC;
+  if (playerLimit.thermalThrottling) {
+    maxUpdatesPerSec = limits.THERMAL_MAX_UPDATES;
+  } else if (playerLimit.batteryOptimization) {
+    maxUpdatesPerSec = limits.BATTERY_SAVER_UPDATES;
+  } else if (tierConfig) {
+    maxUpdatesPerSec = Math.min(maxUpdatesPerSec, tierConfig.maxFPS);
+  }
+
   const timeSinceLastUpdate = now - playerLimit.lastUpdate;
-  const minInterval = 1000 / limits.MAX_UPDATES_PER_SEC;
+  const minInterval = 1000 / maxUpdatesPerSec;
 
   // Check if enough time has passed since last update
   if (timeSinceLastUpdate < minInterval) {
@@ -263,8 +390,14 @@ function shouldSendUpdateToPlayer(playerId) {
     playerLimit.throttled = false;
   }
 
+  // Adjust burst limit based on performance tier
+  let burstLimit = limits.BURST_LIMIT;
+  if (playerLimit.thermalThrottling || playerLimit.batteryOptimization) {
+    burstLimit = Math.max(1, Math.floor(burstLimit * 0.5)); // Reduce burst limit by 50%
+  }
+
   // Check burst limit
-  if (playerLimit.burstCount >= limits.BURST_LIMIT && !playerLimit.throttled) {
+  if (playerLimit.burstCount >= burstLimit && !playerLimit.throttled) {
     playerLimit.throttled = true;
     return false;
   }
@@ -580,7 +713,7 @@ const gameState = {
   players: new Map(),
   foods: [],
   deadPoints: [],
-  maxFoods: 300,
+  maxFoods: config.MAX_FOODS,
   worldWidth: WORLD_WIDTH,
   worldHeight: WORLD_HEIGHT,
 };
@@ -762,8 +895,10 @@ function broadcastOptimizedGameState(
     // Skip if targeting specific player and this isn't the target
     if (targetPlayerId && player.id !== targetPlayerId) return;
 
-    // Enhanced rate limiting with adaptive throttling
-    if (!shouldSendUpdateToPlayer(player.id)) {
+    // Enhanced rate limiting with mobile thermal management
+    // Get client performance hints from viewport optimizer if available
+    const clientPerformanceHint = player.performanceHint || null;
+    if (!shouldSendUpdateToPlayer(player.id, clientPerformanceHint)) {
       return;
     }
 
@@ -1140,45 +1275,13 @@ function generateLeaderboard() {
 const updateLeaderboard = () => {
   const leaderboard = generateLeaderboard();
   // const fullLeaderboard = generateFullLeaderboard();
-  io.emit("leaderboardUpdate", {
-    leaderboard: leaderboard,
-    // fullLeaderboard: fullLeaderboard,
-  });
+  setTimeout(() => {
+    io.emit("leaderboardUpdate", {
+      leaderboard: leaderboard,
+      // fullLeaderboard: fullLeaderboard,
+    });
+  }, 500);
 };
-
-// Enhanced batch update system for player movements with delta compression
-function addPlayerUpdateToBatch(playerId, updateData) {
-  if (!playerUpdateBatches.has(playerId)) {
-    playerUpdateBatches.set(playerId, []);
-  }
-
-  const batch = playerUpdateBatches.get(playerId);
-  const previousState = playerPreviousStates.get(playerId);
-
-  // Enhanced update data with previous state for delta compression
-  const enhancedUpdate = {
-    ...updateData,
-    timestamp: Date.now(),
-    // Include previous state data for delta compression
-    prevX: previousState?.players?.find((p) => p.id === playerId)?.x,
-    prevY: previousState?.players?.find((p) => p.id === playerId)?.y,
-    prevAngle: previousState?.players?.find((p) => p.id === playerId)?.a,
-  };
-
-  batch.push(enhancedUpdate);
-
-  // Reduced batch size for better responsiveness
-  if (batch.length > BATCH_SIZE) {
-    batch.shift(); // Remove oldest update
-  }
-
-  // Auto-flush old batches with enhanced filtering
-  const now = Date.now();
-  const filteredBatch = batch.filter(
-    (update) => now - update.timestamp < BATCH_TIMEOUT
-  );
-  playerUpdateBatches.set(playerId, filteredBatch);
-}
 
 // Update spatial partitioning with current game objects
 function updateSpatialPartitioning() {
@@ -1212,10 +1315,6 @@ function updateSpatialPartitioning() {
 // Initialize food
 function initializeFoods() {
   gameState.foods = [];
-  // console.log(
-  //   `🍎 Initializing ${gameState.maxFoods} food items in ${gameState.worldWidth}x${gameState.worldHeight} world...`
-  // );
-
   for (let i = 0; i < gameState.maxFoods; i++) {
     const type = getRandomFood();
     const food = {
@@ -1238,15 +1337,15 @@ function initializeFoods() {
     }
   }
 
-  console.log(
-    `🍎 Food initialization complete: ${gameState.foods.length} foods spawned`
-  );
+  // console.log(
+  //   `🍎 Food initialization complete: ${gameState.foods.length} foods spawned`
+  // );
 
   // Update spatial partitioning after food initialization
   updateSpatialPartitioning();
-  console.log(
-    `🗂️ Spatial partitioning updated with ${gameState.foods.length} foods`
-  );
+  // console.log(
+  //   `🗂️ Spatial partitioning updated with ${gameState.foods.length} foods`
+  // );
 }
 
 // Universal stuck detection for ALL players (bots and humans)
@@ -1361,7 +1460,7 @@ function checkForStuckPlayers() {
               const newFoodItems = [];
               if (player.points && player.points.length > 0) {
                 // Calculate 80% of player's score for food conversion (same as collision death)
-                const targetScoreValue = Math.floor(player.score * 0.8);
+                const targetScoreValue = Math.floor(player.score * 0.95);
                 const currentFoodCount = gameState.foods.length;
                 const availableSlots = Math.max(
                   0,
@@ -1413,17 +1512,17 @@ function checkForStuckPlayers() {
               });
 
               // Update leaderboard after player removal
-             updateLeaderboard();
+              updateLeaderboard();
             }
             return; // Skip further processing for this player
           } else {
             // Log progress every 2 seconds
             if (totalStuckTime % 2000 < 100) {
-              console.log(
-                `🐍 Player ${player.id} (${
-                  player.isBot ? "BOT" : "HUMAN"
-                }) still stuck for ${(totalStuckTime / 1000).toFixed(1)}s`
-              );
+              // console.log(
+              //   `🐍 Player ${player.id} (${
+              //     player.isBot ? "BOT" : "HUMAN"
+              //   }) still stuck for ${(totalStuckTime / 1000).toFixed(1)}s`
+              // );
             }
           }
         }
@@ -1747,7 +1846,6 @@ function generateOptimalFoodDistribution(
 
     totalFoods++;
   }
-
 
   // Enhanced spacing algorithm for better snake body coverage
   const newFoodItems = [];
@@ -2090,20 +2188,20 @@ function findSafeSpawnPosition(radius) {
       );
 
       if (isPositionSafe(clampedX, clampedY, radius)) {
-        console.log(
-          `✅ DEBUG: Found safe position in zone ${index} at (${clampedX.toFixed(
-            2
-          )}, ${clampedY.toFixed(2)}) after ${attempt + 1} attempts`
-        );
+        // console.log(
+        //   `✅ DEBUG: Found safe position in zone ${index} at (${clampedX.toFixed(
+        //     2
+        //   )}, ${clampedY.toFixed(2)}) after ${attempt + 1} attempts`
+        // );
         return { x: clampedX, y: clampedY };
       }
     }
-    console.log(
-      `❌ DEBUG: Zone ${index} failed after ${maxZoneAttempts} attempts`
-    );
+    // console.log(
+    //   `❌ DEBUG: Zone ${index} failed after ${maxZoneAttempts} attempts`
+    // );
   }
 
-  console.log(`⚠️ DEBUG: All zones failed, trying enhanced fallback positions`);
+  // console.log(`⚠️ DEBUG: All zones failed, trying enhanced fallback positions`);
   // Enhanced fallback: try scattered positions across the entire map
   for (let attempt = 0; attempt < maxFallbackAttempts; attempt++) {
     const margin = 80;
@@ -2112,22 +2210,22 @@ function findSafeSpawnPosition(radius) {
 
     if (isPositionSafe(x, y, radius, 100)) {
       // Reduced safety distance for fallback
-      console.log(
-        `✅ DEBUG: Found safe fallback position at (${x.toFixed(
-          2
-        )}, ${y.toFixed(2)}) after ${attempt + 1} attempts`
-      );
+      // console.log(
+      //   `✅ DEBUG: Found safe fallback position at (${x.toFixed(
+      //     2
+      //   )}, ${y.toFixed(2)}) after ${attempt + 1} attempts`
+      // );
       return { x, y };
     }
   }
 
-  console.log(
-    `🚨 DEBUG: Enhanced fallback failed, trying emergency strategies`
-  );
+  // console.log(
+  //   `🚨 DEBUG: Enhanced fallback failed, trying emergency strategies`
+  // );
 
   // Strategy 1: Emergency scatter spawn with relaxed safety requirements
   for (let retry = 0; retry < maxRetries; retry++) {
-    console.log(`🔄 DEBUG: Emergency retry ${retry + 1}/${maxRetries}`);
+    // console.log(`🔄 DEBUG: Emergency retry ${retry + 1}/${maxRetries}`);
     let bestPosition = null;
     let maxMinDistance = 0;
     const relaxedMinDistance = Math.max(50, 150 - retry * 30); // Gradually relax requirements
@@ -2155,15 +2253,15 @@ function findSafeSpawnPosition(radius) {
       bestPosition &&
       isPositionSafe(bestPosition.x, bestPosition.y, radius, relaxedMinDistance)
     ) {
-      console.log(
-        `🚨 DEBUG: Found emergency position at (${bestPosition.x.toFixed(
-          2
-        )}, ${bestPosition.y.toFixed(
-          2
-        )}) with min distance ${maxMinDistance.toFixed(2)} on retry ${
-          retry + 1
-        }`
-      );
+      // console.log(
+      //   `🚨 DEBUG: Found emergency position at (${bestPosition.x.toFixed(
+      //     2
+      //   )}, ${bestPosition.y.toFixed(
+      //     2
+      //   )}) with min distance ${maxMinDistance.toFixed(2)} on retry ${
+      //     retry + 1
+      //   }`
+      // );
       return bestPosition;
     }
   }
@@ -2180,15 +2278,15 @@ function findSafeSpawnPosition(radius) {
       const y = 100 + gy * stepY + Math.random() * stepY * 0.5;
 
       if (isPositionSafe(x, y, radius, 80)) {
-        console.log(
-          `🔍 DEBUG: Found grid position at (${x.toFixed(2)}, ${y.toFixed(2)})`
-        );
+        // console.log(
+        //   `🔍 DEBUG: Found grid position at (${x.toFixed(2)}, ${y.toFixed(2)})`
+        // );
         return { x, y };
       }
     }
   }
 
-  console.log(`🚨 DEBUG: All methods failed, using safe edge position`);
+  // console.log(`🚨 DEBUG: All methods failed, using safe edge position`);
   // Absolute last resort: safe edge position
   const edge = Math.floor(Math.random() * 4);
   const safeMargin = 100;
@@ -2210,11 +2308,11 @@ function findSafeSpawnPosition(radius) {
       y: gameState.worldHeight - safeMargin,
     },
   }[edge];
-  console.log(
-    `🚨 DEBUG: Using safe edge ${edge} position at (${edgePosition.x.toFixed(
-      2
-    )}, ${edgePosition.y.toFixed(2)})`
-  );
+  // console.log(
+  //   `🚨 DEBUG: Using safe edge ${edge} position at (${edgePosition.x.toFixed(
+  //     2
+  //   )}, ${edgePosition.y.toFixed(2)})`
+  // );
   return edgePosition;
 }
 
@@ -2329,11 +2427,11 @@ function calculateSafeSpawnDirection(x, y, radius) {
   }
 
   // Last resort: random angle (should rarely happen with improved spawn zones)
-  console.log(
-    `⚠️ DEBUG: Using fallback random angle for position (${x.toFixed(
-      2
-    )}, ${y.toFixed(2)})`
-  );
+  // console.log(
+  //   `⚠️ DEBUG: Using fallback random angle for position (${x.toFixed(
+  //     2
+  //   )}, ${y.toFixed(2)})`
+  // );
   return Math.random() * Math.PI * 2;
 }
 
@@ -2346,13 +2444,13 @@ function createBot(id) {
     botRadius
   );
 
-  console.log(
-    `🤖 DEBUG: Creating bot ${id} at position (${safePosition.x.toFixed(
-      2
-    )}, ${safePosition.y.toFixed(2)}) with safe angle ${safeAngle.toFixed(
-      3
-    )} radians (${((safeAngle * 180) / Math.PI).toFixed(1)}°)`
-  );
+  // console.log(
+  //   `🤖 DEBUG: Creating bot ${id} at position (${safePosition.x.toFixed(
+  //     2
+  //   )}, ${safePosition.y.toFixed(2)}) with safe angle ${safeAngle.toFixed(
+  //     3
+  //   )} radians (${((safeAngle * 180) / Math.PI).toFixed(1)}°)`
+  // );
 
   // Bot personality types for diverse behavior
   const personalityTypes = ["explorer", "hunter", "wanderer"];
@@ -2391,11 +2489,11 @@ function createBot(id) {
     lastWanderTime: Date.now(),
   };
 
-  console.log(
-    `🛡️ DEBUG: Bot ${id} spawn protection enabled until ${new Date(
-      bot.spawnTime + 3000
-    ).toLocaleTimeString()}`
-  );
+  // console.log(
+  //   `🛡️ DEBUG: Bot ${id} spawn protection enabled until ${new Date(
+  //     bot.spawnTime + 3000
+  //   ).toLocaleTimeString()}`
+  // );
 
   // Initialize bot with starting points using bot's main color
   for (let i = 0; i < 20; i++) {
@@ -2408,9 +2506,9 @@ function createBot(id) {
     });
   }
 
-  console.log(
-    `✅ DEBUG: Bot ${id} created successfully with ${bot.points.length} body points`
-  );
+  // console.log(
+  //   `✅ DEBUG: Bot ${id} created successfully with ${bot.points.length} body points`
+  // );
   return bot;
 }
 
@@ -2428,9 +2526,9 @@ function addBotsToSpawnQueue(count) {
   if (botsToSpawn <= 0) {
     // Throttled logging to prevent spam
     if (currentTime - lastBotLimitLog > BOT_LOG_THROTTLE) {
-      console.log(
-        `Bot limit reached (${MAX_BOTS}). Current bots: ${currentBots}`
-      );
+      // console.log(
+      //   `Bot limit reached (${MAX_BOTS}). Current bots: ${currentBots}`
+      // );
       lastBotLimitLog = currentTime;
     }
     return;
@@ -2444,9 +2542,9 @@ function addBotsToSpawnQueue(count) {
     });
   }
 
-  console.log(
-    `🤖 QUEUE: Added ${botsToSpawn} bots to spawn queue (total queued: ${botSpawnQueue.length})`
-  );
+  // console.log(
+  //   `🤖 QUEUE: Added ${botsToSpawn} bots to spawn queue (total queued: ${botSpawnQueue.length})`
+  // );
 
   // Start the spawn interval if not already running
   if (!botSpawnInterval) {
@@ -2464,9 +2562,9 @@ function startBotSpawnInterval() {
     processBotSpawnQueue();
   }, BOT_RESPAWN_INTERVAL);
 
-  console.log(
-    `🤖 SPAWN: Started bot spawn interval (${BOT_RESPAWN_INTERVAL}ms)`
-  );
+  // console.log(
+  //   `🤖 SPAWN: Started bot spawn interval (${BOT_RESPAWN_INTERVAL}ms)`
+  // );
 }
 
 // Process the bot spawn queue with staggered timing
@@ -2478,7 +2576,7 @@ function processBotSpawnQueue() {
     if (botSpawnInterval) {
       clearInterval(botSpawnInterval);
       botSpawnInterval = null;
-      console.log(`🤖 SPAWN: Cleared bot spawn interval - queue empty`);
+      // console.log(`🤖 SPAWN: Cleared bot spawn interval - queue empty`);
     }
     return;
   }
@@ -2509,9 +2607,9 @@ function processBotSpawnQueue() {
   // Remove spawned bots from queue
   botSpawnQueue = botSpawnQueue.filter((bot) => !botsToSpawn.includes(bot));
 
-  console.log(
-    `🤖 SPAWN: Processing ${botsToSpawn.length} bots from queue (${botSpawnQueue.length} remaining)`
-  );
+  // console.log(
+  //   `🤖 SPAWN: Processing ${botsToSpawn.length} bots from queue (${botSpawnQueue.length} remaining)`
+  // );
 }
 
 // Spawn a single bot (extracted from original spawnBots function)
@@ -2529,11 +2627,11 @@ function spawnSingleBot(botId) {
   const bot = createBot(botId);
   gameState.players.set(botId, bot);
 
-  console.log(
-    `🤖 SPAWNED: ${botId} at position (${bot.x.toFixed(2)}, ${bot.y.toFixed(
-      2
-    )})`
-  );
+  // console.log(
+  //   `🤖 SPAWNED: ${botId} at position (${bot.x.toFixed(2)}, ${bot.y.toFixed(
+  //     2
+  //   )})`
+  // );
 
   // Broadcast new bot to all players
   io.emit("playerJoined", bot);
@@ -2557,7 +2655,7 @@ function handleBotDeath(bot, killerId = null) {
   bot.alive = false;
 
   // Calculate 80% of bot's score for food conversion (same as human players)
-  const targetScoreValue = Math.floor(bot.score * 0.8);
+  const targetScoreValue = Math.floor(bot.score * 0.95);
   const currentFoodCount = gameState.foods.length;
   const availableSlots = Math.max(0, gameState.maxFoods - currentFoodCount);
 
@@ -2569,16 +2667,16 @@ function handleBotDeath(bot, killerId = null) {
   );
 
   // console.log("💀 BOT DEATH: Generated", newFoodItems.length, "food items");
-  newFoodItems.forEach((food, index) => {
-    console.log(`💀 Food ${index}:`, {
-      x: food.x,
-      y: food.y,
-      type: food.type,
-      isDeadSnakeFood: food.isDeadSnakeFood,
-      snakeColor: food.snakeColor,
-      snakeSegmentSize: food.snakeSegmentSize,
-    });
-  });
+  // newFoodItems.forEach((food, index) => {
+  //   console.log(`💀 Food ${index}:`, {
+  //     x: food.x,
+  //     y: food.y,
+  //     type: food.type,
+  //     isDeadSnakeFood: food.isDeadSnakeFood,
+  //     snakeColor: food.snakeColor,
+  //     snakeSegmentSize: food.snakeSegmentSize,
+  //   });
+  // });
 
   // Add generated food items to game state
   gameState.foods.push(...newFoodItems);
@@ -2698,9 +2796,9 @@ function resumeServer() {
 
   if (botsNeeded > 0) {
     spawnBots(botsNeeded);
-    console.log(
-      `🤖 SERVER: Spawned ${botsNeeded} additional bots for active state`
-    );
+    // console.log(
+    //   `🤖 SERVER: Spawned ${botsNeeded} additional bots for active state`
+    // );
   }
 
   // Start active game loop
@@ -2718,8 +2816,6 @@ function resumeServer() {
 
 // Update player activity tracking
 function updatePlayerActivity() {
-  lastPlayerActivity = Date.now();
-
   // Cancel pause timeout if server should resume
   if (serverState === SERVER_STATES.PAUSED && !shouldPauseServer()) {
     resumeServer();
@@ -2748,9 +2844,9 @@ function performFoodCleanup(targetReduction = 50) {
   const scoreGeneratedFoods = gameState.foods.filter((f) => f.isScoreGenerated);
   const regularFoods = gameState.foods.filter((f) => !f.isScoreGenerated);
 
-  console.log(
-    `🧹 FOOD CLEANUP: Starting cleanup - current: ${currentCount}, max: ${gameState.maxFoods} (score-generated: ${scoreGeneratedFoods.length}, regular: ${regularFoods.length})`
-  );
+  // console.log(
+  //   `🧹 FOOD CLEANUP: Starting cleanup - current: ${currentCount}, max: ${gameState.maxFoods} (score-generated: ${scoreGeneratedFoods.length}, regular: ${regularFoods.length})`
+  // );
 
   // Get current player positions for distance calculations
   const playerPositions = Array.from(gameState.players.values())
@@ -2892,9 +2988,9 @@ function performFoodCleanup(targetReduction = 50) {
     ).length;
     const regularRemovedCount = removedFoods.length - scoreRemovedCount;
 
-    console.log(
-      `🧹 FOOD CLEANUP: Removed ${removedFoods.length} food items (score-generated: ${scoreRemovedCount}/${scoreGeneratedFoods.length}, regular: ${regularRemovedCount}/${regularFoods.length}) - ${gameState.foods.length} remaining`
-    );
+    // console.log(
+    //   `🧹 FOOD CLEANUP: Removed ${removedFoods.length} food items (score-generated: ${scoreRemovedCount}/${scoreGeneratedFoods.length}, regular: ${regularRemovedCount}/${regularFoods.length}) - ${gameState.foods.length} remaining`
+    // );
   }
 }
 
@@ -3084,9 +3180,9 @@ function performSmartDeadPointCleanup(forceCleanup = false) {
   // Update metrics
   performanceMetrics.deadPointsCleanedUp += actualPointsToRemove;
 
-  console.log(
-    `✅ CLEANUP: Removed ${actualPointsToRemove} dead points, ${gameState.deadPoints.length} remaining (${humanPlayerPositions.length} humans, ${botPlayerPositions.length} bots)`
-  );
+  // console.log(
+  //   `✅ CLEANUP: Removed ${actualPointsToRemove} dead points, ${gameState.deadPoints.length} remaining (${humanPlayerPositions.length} humans, ${botPlayerPositions.length} bots)`
+  // );
 
   // Broadcast cleanup to clients if significant (with reduced threshold)
   if (actualPointsToRemove > 500) {
@@ -3095,23 +3191,6 @@ function performSmartDeadPointCleanup(forceCleanup = false) {
       remainingCount: gameState.deadPoints.length,
     });
   }
-}
-
-// Enhanced dead point creation with timestamp
-function createDeadPoint(x, y, radius, color) {
-  const deadPoint = {
-    x,
-    y,
-    radius,
-    color,
-    createdAt: Date.now(),
-  };
-
-  gameState.deadPoints.push(deadPoint);
-  performanceMetrics.deadPointsCreated++;
-  updatePeakMetrics();
-
-  return deadPoint;
 }
 
 function updateBots() {
@@ -3464,11 +3543,11 @@ function updateBots() {
     // Relaxed boundary collision detection - give bots small buffer to prevent excessive deaths
     if (newX < minX || newX > maxX || newY < minY || newY > maxY) {
       // Bot dies from boundary collision - relaxed enforcement with buffer
-      console.log(
-        `Bot ${player.id} died at boundary: position (${newX.toFixed(
-          2
-        )}, ${newY.toFixed(2)}), bounds: x[${minX}-${maxX}], y[${minY}-${maxY}]`
-      );
+      // console.log(
+      //   `Bot ${player.id} died at boundary: position (${newX.toFixed(
+      //     2
+      //   )}, ${newY.toFixed(2)}), bounds: x[${minX}-${maxX}], y[${minY}-${maxY}]`
+      // );
       handleBotDeath(player);
       return;
     }
@@ -3489,9 +3568,9 @@ function updateBots() {
       currentTime - player.spawnTime >= spawnProtectionDuration
     ) {
       player.spawnProtection = false;
-      console.log(
-        `🛡️ DEBUG: Spawn protection removed for bot ${player.id} during update`
-      );
+      // console.log(
+      //   `🛡️ DEBUG: Spawn protection removed for bot ${player.id} during update`
+      // );
     }
 
     // Check collision with other players/bots before updating position
@@ -3659,13 +3738,13 @@ function updateBots() {
           break; // Only eat one dead point per update cycle
         } else {
           // Dead point is protected due to age
-          console.log(
-            `🛡️ Bot ${
-              player.id
-            } attempted to eat protected dead point (age: ${Math.round(
-              age / 1000
-            )}s < ${CLEANUP_INTERVAL / 1000}s)`
-          );
+          // console.log(
+          //   `🛡️ Bot ${
+          //     player.id
+          //   } attempted to eat protected dead point (age: ${Math.round(
+          //     age / 1000
+          //   )}s < ${CLEANUP_INTERVAL / 1000}s)`
+          // );
         }
       }
     }
@@ -3693,7 +3772,6 @@ io.on("connection", (socket) => {
     const authenticatedUserData = socket.data.userData;
     const authenticatedOpenId = socket.data.openId;
     const authenticatedUserInfo = socket.data.userInfo;
-
 
     // Prioritize authenticated data, fallback to provided userData
     const finalUserData = isAuthenticated ? authenticatedUserData : userData;
@@ -3748,7 +3826,7 @@ io.on("connection", (socket) => {
     }
 
     gameState.players.set(playerId, newPlayer);
- 
+
     // Track player connection metrics
     performanceMetrics.playerConnections++;
     updatePeakMetrics();
@@ -3819,9 +3897,9 @@ io.on("connection", (socket) => {
         currentTime - player.spawnTime >= spawnProtectionDuration
       ) {
         player.spawnProtection = false;
-        console.log(
-          `🛡️ DEBUG: Spawn protection removed for player ${data.playerId} during movement`
-        );
+        // console.log(
+        //   `🛡️ DEBUG: Spawn protection removed for player ${data.playerId} during movement`
+        // );
       }
 
       // Broadcast movement to all other players with current spawn protection status
@@ -3836,6 +3914,43 @@ io.on("connection", (socket) => {
         points: data.points,
         spawnProtection: hasSpawnProtection,
       });
+    }
+  });
+
+  // Handle performance hints from client for mobile thermal management
+  socket.on("performanceHint", (data) => {
+    const player = gameState.players.get(data.playerId);
+    if (player) {
+      // Store performance hint data on player object
+      player.performanceHint = data.performanceHint;
+
+      // Log thermal/battery state changes for debugging
+      if (
+        data.performanceHint.thermalState &&
+        data.performanceHint.thermalState !== "normal"
+      ) {
+        console.log(
+          `🌡️ Player ${data.playerId} thermal state: ${data.performanceHint.thermalState}`
+        );
+      }
+
+      if (
+        data.performanceHint.batteryLevel &&
+        data.performanceHint.batteryLevel < 20 &&
+        !data.performanceHint.charging
+      ) {
+        console.log(
+          `🔋 Player ${data.playerId} low battery: ${data.performanceHint.batteryLevel}%`
+        );
+      }
+
+      if (data.performanceHint.fps && data.performanceHint.fps < 20) {
+        console.log(
+          `📉 Player ${
+            data.playerId
+          } low FPS: ${data.performanceHint.fps.toFixed(1)}`
+        );
+      }
     }
   });
 
@@ -3935,13 +4050,13 @@ io.on("connection", (socket) => {
       player.score += pointValue;
       performanceMetrics.foodEaten++;
 
-      console.log(
-        `🍎 Player ${playerId} ate food ${foodId}: regenerated from (${oldPos.x.toFixed(
-          2
-        )}, ${oldPos.y.toFixed(2)}) to (${food.x.toFixed(2)}, ${food.y.toFixed(
-          2
-        )})`
-      );
+      // console.log(
+      //   `🍎 Player ${playerId} ate food ${foodId}: regenerated from (${oldPos.x.toFixed(
+      //     2
+      //   )}, ${oldPos.y.toFixed(2)}) to (${food.x.toFixed(2)}, ${food.y.toFixed(
+      //     2
+      //   )})`
+      // );
 
       // Update spatial partitioning after food regeneration
       spatialAgent.updateObject(food.id, food.x, food.y, food);
@@ -4062,7 +4177,7 @@ io.on("connection", (socket) => {
     const deadPoints = data.deadPoints;
     const killerId = data.killerId; // Get killer ID from client
     const totalScore = player.score || deadPoints.length;
-    const targetScoreValue = Math.floor(totalScore * 0.8); // 80% of score as food value
+    const targetScoreValue = Math.floor(totalScore * 0.95); // 90% of score as food value
 
     // Optimized food generation with exact score matching
     const newFoodItems = generateOptimalFoodDistribution(
@@ -4287,7 +4402,7 @@ io.on("connection", (socket) => {
             const newFoodItems = [];
             if (currentPlayer.points && currentPlayer.points.length > 0) {
               // Calculate 80% of player's score for food conversion
-              const targetScoreValue = Math.floor(currentPlayer.score * 0.8);
+              const targetScoreValue = Math.floor(currentPlayer.score * 0.95);
               const currentFoodCount = gameState.foods.length;
               const availableSlots = Math.max(
                 0,
@@ -4561,7 +4676,6 @@ startMemoryMonitoring();
 // Start performance metrics logging
 startPerformanceMetricsLogging();
 
-
 // Generate full leaderboard data (for finding current player's rank)
 // function generateFullLeaderboard() {
 //   const allAlivePlayers = Array.from(gameState.players.values())
@@ -4630,9 +4744,29 @@ app.get("/", (req, res) => {
   });
 });
 
-const PORT = process.env.PORT || 9000;
-server.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-  console.log(`Game available at http://localhost:${PORT}`);
-  console.log(`Health check available at http://localhost:${PORT}/health`);
+// Start HTTP server
+httpServer.listen(config.PORT, () => {
+  console.log(`🚀 Snake Zone HTTP server running on port ${config.PORT}`);
+  console.log(`🎮 Game world: ${WORLD_WIDTH}x${WORLD_HEIGHT}`);
+  console.log(`🤖 Max bots: ${MAX_BOTS}`);
+  console.log(`🌍 Environment: ${config.NODE_ENV}`);
+  console.log(`🔗 Game available at http://localhost:${config.PORT}`);
+  console.log(
+    `❤️ Health check available at http://localhost:${config.PORT}/health`
+  );
 });
+
+// Start HTTPS server if SSL is enabled
+if (config.SSL_ENABLED && httpsServer) {
+  httpsServer.listen(config.SSL_PORT, () => {
+    console.log(
+      `🔒 Snake Zone HTTPS server running on port ${config.SSL_PORT}`
+    );
+    console.log(
+      `🔗 Secure game available at https://localhost:${config.SSL_PORT}`
+    );
+    console.log(
+      `❤️ Secure health check available at https://localhost:${config.SSL_PORT}/health`
+    );
+  });
+}
