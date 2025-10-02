@@ -1495,14 +1495,6 @@ function generateOptimalFoodDistribution(
         Math.min(baseStep * spacingMultiplier, deadPoints.length / totalFoods)
       );
 
-      console.log(
-        `🎯 Food spacing: Snake length ${
-          deadPoints.length
-        }, Foods ${totalFoods}, Step size ${step.toFixed(
-          2
-        )} (2.1-2.8x wider gaps)`
-      );
-
       for (let i = 0; i < totalFoods; i++) {
         let index;
         if (totalFoods === 1) {
@@ -1532,12 +1524,6 @@ function generateOptimalFoodDistribution(
         }
 
         segmentIndices.push(index);
-        console.log(
-          `🎯 Food ${i + 1}/${totalFoods} placed at segment ${index} (${(
-            (index / (deadPoints.length - 1)) *
-            100
-          ).toFixed(1)}% along snake)`
-        );
       }
     }
   }
@@ -1554,12 +1540,6 @@ function generateOptimalFoodDistribution(
   // Sort by value ascending: watermelon(3) → apple(6) → cherry(9) → orange(12) → grapes(150)
   // This creates the desired pattern: lowest value at head, highest value at tail
   allFoodItems.sort((a, b) => a.value - b.value);
-
-  console.log(
-    `🎯 Food placement order (head→tail): ${allFoodItems
-      .map((f) => `${f.type}(${f.value})`)
-      .join(" → ")}`
-  );
 
   // Place foods from head to tail in value-ascending order
   for (let i = 0; i < allFoodItems.length && i < segmentIndices.length; i++) {
@@ -1590,12 +1570,6 @@ function generateOptimalFoodDistribution(
         : segmentIndex === deadPoints.length - 1
         ? "TAIL"
         : `${((segmentIndex / (deadPoints.length - 1)) * 100).toFixed(1)}%`;
-
-    console.log(
-      `🎯 Food ${
-        i + 1
-      }: ${type}(${value} pts) → segment ${segmentIndex} (${position})`
-    );
   }
 
   // Calculate actual score generated
@@ -1604,14 +1578,6 @@ function generateOptimalFoodDistribution(
     0
   );
 
-  console.log(
-    `🎯 PROPORTIONAL food distribution: Snake length ${snakeLength} → Target ${targetScore} → Actual ${actualScore} (${distribution
-      .map((d) => `${d.type}:${d.count}`)
-      .join(", ")}) | Foods: ${totalFoods}/${targetFoodCount} | Coverage: ${(
-      (totalFoods / snakeLength) *
-      100
-    ).toFixed(1)}% (SIZE-PROPORTIONAL)`
-  );
 
   if (totalFoods < minFoodCount) {
     console.warn(
