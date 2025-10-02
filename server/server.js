@@ -1242,7 +1242,7 @@ function getPointValueByType(type) {
     case "orange":
       return 12;
     case "grapes":
-      return 500;
+      return 100;
     default:
       return POINT;
   }
