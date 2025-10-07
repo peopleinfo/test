@@ -1,6 +1,7 @@
 const express = require("express");
 const http = require("http");
 const socketIo = require("socket.io");
+const msgpackParser = require("socket.io-msgpack-parser");
 
 // Import optimization agents
 const {
@@ -10,12 +11,10 @@ const RelevancyScoreAgent = require("./agents/RelevancyScoreAgent");
 const { PredictiveCullingAgent } = require("./agents/PredictiveCullingAgent");
 const { NetworkAdaptationAgent } = require("./agents/NetworkAdaptationAgent");
 
-// Import binary protocol for optimized data transmission
-const BinaryProtocol = require("./utils/binaryProtocol");
-
 const app = express();
 const server = http.createServer(app);
 const io = socketIo(server, {
+  parser: msgpackParser,
   cors: {
     origin: "*",
     methods: ["GET", "POST"],
@@ -108,12 +107,13 @@ const MIN_PLAYERS_FOR_BATTLE = 3;
 const MAX_BOTS = MIN_PLAYERS_FOR_BATTLE;
 const POINT = 3; // Points awarded for eating food or dead points
 const FOOD_RADIUS = 5.5;
+const SNAKE_SEGMENT_SCALE = 0.03; // Size of each snake segment
 
 // ===== ADAPTIVE RATE LIMITING CONFIGURATION =====
 const RATE_LIMITING_CONFIG = {
   // Base FPS settings
   MIN_FPS: 30, // Minimum 10 FPS (100ms intervals)
-  MAX_FPS: 50, // Maximum 50 FPS (20ms intervals)
+  MAX_FPS: 35, // Maximum 50 FPS (20ms intervals)
   BASE_FPS: 30, // Default 30 FPS (33ms intervals)
 
   // Player count thresholds for adaptive FPS
@@ -580,8 +580,7 @@ const relevancyAgent = new RelevancyScoreAgent();
 const predictiveAgent = new PredictiveCullingAgent();
 const networkAgent = new NetworkAdaptationAgent();
 
-// Initialize binary protocol for optimized data transmission
-const binaryProtocol = new BinaryProtocol();
+// Network optimization agents initialized
 
 // Client viewport tracking
 const clientViewports = new Map(); // playerId -> viewport bounds
@@ -621,13 +620,8 @@ function broadcastOptimizedGameState(
         deadPoints: gameState.deadPoints,
       };
 
-      // Use binary protocol for fallback as well (with rate limiting already applied)
-      const optimizedFallback = binaryProtocol.createOptimizedGameState(
-        player.id,
-        fallbackData
-      );
-      const binaryFallback = binaryProtocol.serialize(optimizedFallback);
-      io.to(player.socketId).emit("binaryGameUpdate", binaryFallback);
+      // Send fallback data as JSON (with rate limiting already applied)
+      // io.to(player.socketId).emit("gameUpdate", fallbackData);
       return;
     }
 
@@ -721,15 +715,8 @@ function broadcastOptimizedGameState(
         },
       };
 
-      // Use enhanced binary protocol with delta compression
-      const optimizedData = binaryProtocol.createOptimizedGameState(
-        player.id,
-        gameStateData
-      );
-
-      // Send binary data with compression tracking
-      const binaryData = binaryProtocol.serialize(optimizedData);
-      io.to(player.socketId).emit("binaryGameUpdate", binaryData);
+      // Send game state data as JSON (msgpack parser will handle compression)
+      // io.to(player.socketId).emit("gameUpdate", gameStateData);
 
       // Track bandwidth usage per player
       if (!player.bandwidthStats) {
@@ -741,15 +728,11 @@ function broadcastOptimizedGameState(
           fullUpdates: 0,
         };
       }
-      player.bandwidthStats.totalBytes += binaryData.length;
+      // Estimate data size for tracking (msgpack will compress)
+      const estimatedSize = JSON.stringify(gameStateData).length;
+      player.bandwidthStats.totalBytes += estimatedSize;
       player.bandwidthStats.updateCount++;
-
-      // Track update type
-      if (optimizedData.type === "delta") {
-        player.bandwidthStats.deltaUpdates++;
-      } else {
-        player.bandwidthStats.fullUpdates++;
-      }
+      player.bandwidthStats.fullUpdates++;
 
       player.lastUpdate = currentTime;
 
@@ -767,26 +750,14 @@ function broadcastOptimizedGameState(
           100
         ).toFixed(1);
 
-        const binaryStats = binaryProtocol.getStats();
         const timeElapsed =
           (currentTime - player.bandwidthStats.startTime) / 1000;
         const bytesPerSecond =
           timeElapsed > 0 ? player.bandwidthStats.totalBytes / timeElapsed : 0;
-        const deltaRatio =
-          player.bandwidthStats.updateCount > 0
-            ? (
-                (player.bandwidthStats.deltaUpdates /
-                  player.bandwidthStats.updateCount) *
-                100
-              ).toFixed(1)
-            : 0;
 
-        console.log(`🚀 Enhanced Binary Update [${player.id}]:`, {
+        console.log(`🚀 Optimized Update [${player.id}]:`, {
           spatial: `${spatialReduction}% reduction (${originalCount}→${optimizedCount})`,
-          binary: `${binaryStats.compressionRatio.toFixed(1)}% compression`,
-          deltas: `${deltaRatio}% delta updates`,
           bandwidth: `${(bytesPerSecond / 1024).toFixed(1)} KB/s`,
-          updateType: optimizedData.type,
           fps: currentRenderFPS,
         });
       }
@@ -1020,7 +991,7 @@ function startOptimizedGameLoop() {
     checkForStuckPlayers();
 
     // Broadcast optimized game state to all players with rate limiting
-    broadcastOptimizedGameState(null, "gameUpdate");
+    // broadcastOptimizedGameState(null, "gameUpdate");
 
     // Update predictive agent predictions
     predictiveAgent.updatePredictions();
@@ -2924,7 +2895,13 @@ function updateBots() {
         player.score += pointValue;
 
         // Add multiple segments based on food point value (1 segment = 10 points)
-        const segmentsToAdd = Math.max(1, Math.floor(pointValue / 10));
+        const pointSegment =
+          pointValue >= 1100 ? Math.floor(pointValue * SNAKE_SEGMENT_SCALE) : 5;
+
+        const segmentsToAdd = Math.max(
+          1,
+          Math.floor(pointValue / pointSegment)
+        );
         console.log(
           `🤖 Bot ${player.id} eating ${eatentype}: ${pointValue} points = ${segmentsToAdd} segments`
         );
@@ -2992,8 +2969,14 @@ function updateBots() {
           // Bot eats dead point - award points based on food type
           player.score += pointValue;
 
+          const pointSegment =
+            pointValue >= 1100 ? Math.floor(pointValue * SNAKE_SEGMENT_SCALE) : 5;
+
           // Add multiple segments based on dead point value (1 segment = 10 points)
-          const segmentsToAdd = Math.max(1, Math.floor(pointValue / 10));
+          const segmentsToAdd = Math.max(
+            1,
+            Math.floor(pointValue / pointSegment)
+          );
           // console.log(
           //   `🤖 Bot ${player.id} eating dead point ${deadPointType}: ${pointValue} points = ${segmentsToAdd} segments`
           // );
@@ -3155,9 +3138,9 @@ io.on("connection", (socket) => {
     });
 
     // Start sending optimized updates to this player
-    setTimeout(() => {
-      broadcastOptimizedGameState(playerId, "gameUpdate");
-    }, 1000); // Give client time to set up viewport tracking
+    // setTimeout(() => {
+    //   broadcastOptimizedGameState(playerId, "gameUpdate");
+    // }, 1000); // Give client time to set up viewport tracking
 
     // Send initial leaderboard to new player
     sendLeaderboardToSocket(socket);
@@ -4064,20 +4047,20 @@ class LeaderboardManager {
   }
 
   // Generate full leaderboard data (for finding current player's rank)
-  generateFullLeaderboard() {
-    const allAlivePlayers = getAlivePlayers().sort((a, b) => b.score - a.score);
+  // generateFullLeaderboard() {
+  //   const allAlivePlayers = getAlivePlayers().sort((a, b) => b.score - a.score);
 
-    return allAlivePlayers.map((player, index) => ({
-      id: player.id,
-      name:
-        player.userName ||
-        (player.isBot ? `${player.id.replace("bot-", "")}` : `${player.id}`),
-      score: player.score,
-      rank: index + 1,
-      isBot: player.isBot || false,
-      realUserId: player.realUserId || null,
-    }));
-  }
+  //   return allAlivePlayers.map((player, index) => ({
+  //     id: player.id,
+  //     name:
+  //       player.userName ||
+  //       (player.isBot ? `${player.id.replace("bot-", "")}` : `${player.id}`),
+  //     score: player.score,
+  //     rank: index + 1,
+  //     isBot: player.isBot || false,
+  //     realUserId: player.realUserId || null,
+  //   }));
+  // }
 
   // Force cache invalidation
   invalidateCache() {
