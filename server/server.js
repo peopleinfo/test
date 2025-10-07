@@ -1,7 +1,6 @@
 const express = require("express");
 const http = require("http");
 const socketIo = require("socket.io");
-const msgpackParser = require("socket.io-msgpack-parser");
 
 // Import optimization agents
 const {
@@ -11,10 +10,12 @@ const RelevancyScoreAgent = require("./agents/RelevancyScoreAgent");
 const { PredictiveCullingAgent } = require("./agents/PredictiveCullingAgent");
 const { NetworkAdaptationAgent } = require("./agents/NetworkAdaptationAgent");
 
+// Import binary protocol for optimized data transmission
+const BinaryProtocol = require("./utils/binaryProtocol");
+
 const app = express();
 const server = http.createServer(app);
 const io = socketIo(server, {
-  parser: msgpackParser,
   cors: {
     origin: "*",
     methods: ["GET", "POST"],
@@ -107,14 +108,20 @@ const MIN_PLAYERS_FOR_BATTLE = 3;
 const MAX_BOTS = MIN_PLAYERS_FOR_BATTLE;
 const POINT = 3; // Points awarded for eating food or dead points
 const FOOD_RADIUS = 5.5;
-const SNAKE_SEGMENT_SCALE = 0.06; // Size of each snake segment
-const SNAKE_SEGMENT_DEFAULT = 10; // Size of each snake segment
+
+// Client rendering - smooth visuals
+// const RENDER_FPS = 60; // 16ms
+// Network updates - optimized bandwidth
+const BASE_RENDER_FPS = 50; // 20ms base interval
+// const RENDER_FPS = 20; // 50ms
+// Game logic - consistent gameplay
+// const RENDER_FPS = 30; // 33ms
 
 // ===== ADAPTIVE RATE LIMITING CONFIGURATION =====
 const RATE_LIMITING_CONFIG = {
   // Base FPS settings
   MIN_FPS: 30, // Minimum 10 FPS (100ms intervals)
-  MAX_FPS: 30, // Maximum 50 FPS (20ms intervals)
+  MAX_FPS: 50, // Maximum 50 FPS (20ms intervals)
   BASE_FPS: 30, // Default 30 FPS (33ms intervals)
 
   // Player count thresholds for adaptive FPS
@@ -159,7 +166,9 @@ const playerRateLimits = new Map();
 
 // Calculate adaptive FPS based on current conditions
 function calculateAdaptiveFPS() {
-  const playerCount = getHumanPlayers().length;
+  const playerCount = Array.from(gameState.players.values()).filter(
+    (p) => !p.isBot
+  ).length;
   const totalPlayers = gameState.players.size;
 
   let targetFPS;
@@ -260,8 +269,15 @@ function cleanupPlayerRateLimits() {
   }
 }
 
+// Get current effective FPS
+function getCurrentFPS() {
+  return currentRenderFPS;
+}
+
 // Bot management throttling
+let lastBotSpawnAttempt = 0;
 let lastBotLimitLog = 0;
+const BOT_SPAWN_COOLDOWN = 2000; // 2 seconds between spawn attempts
 const BOT_LOG_THROTTLE = 5000; // 5 seconds between limit logs
 
 // Debounced bot spawning system
@@ -419,7 +435,7 @@ function performAggressiveCleanup() {
   }
 
   // Remove excess bots if any
-  const bots = getBotPlayers();
+  const bots = Array.from(gameState.players.values()).filter((p) => p.isBot);
   const botsToRemove = Math.max(0, bots.length - 3); // Keep minimum 3 bots
   for (let i = 0; i < botsToRemove; i++) {
     gameState.players.delete(bots[i].id);
@@ -533,37 +549,6 @@ const gameState = {
   worldHeight: 800,
 };
 
-// DRY utility functions for player filtering
-// Get all players as array
-function getAllPlayers() {
-  return Array.from(gameState.players.values());
-}
-
-// Get only human players (non-bot)
-function getHumanPlayers() {
-  return getAllPlayers().filter((player) => !player.isBot);
-}
-
-// Get only bot players
-function getBotPlayers() {
-  return getAllPlayers().filter((player) => player.isBot);
-}
-
-// Get all alive players
-function getAlivePlayers() {
-  return getAllPlayers().filter((player) => player.alive);
-}
-
-// Get alive human players only
-function getAliveHumanPlayers() {
-  return getHumanPlayers().filter((player) => player.alive);
-}
-
-// Get alive bot players only
-function getAliveBots() {
-  return getBotPlayers().filter((player) => player.alive);
-}
-
 // Initialize optimization agents
 const spatialAgent = new SpatialPartitioningAgent(
   gameState.worldWidth,
@@ -574,43 +559,11 @@ const relevancyAgent = new RelevancyScoreAgent();
 const predictiveAgent = new PredictiveCullingAgent();
 const networkAgent = new NetworkAdaptationAgent();
 
-// Network optimization agents initialized
+// Initialize binary protocol for optimized data transmission
+const binaryProtocol = new BinaryProtocol();
 
 // Client viewport tracking
 const clientViewports = new Map(); // playerId -> viewport bounds
-
-// ===== PLAYER DATA ACCESS UTILITY FUNCTIONS =====
-// Centralized functions to eliminate Array.from(gameState.players.values()) duplication
-
-// Get all players as array
-function getAllPlayers() {
-  return Array.from(gameState.players.values());
-}
-
-// Get only human players (non-bot)
-function getHumanPlayers() {
-  return getAllPlayers().filter((player) => !player.isBot);
-}
-
-// Get only bot players
-function getBotPlayers() {
-  return getAllPlayers().filter((player) => player.isBot);
-}
-
-// Get all alive players
-function getAlivePlayers() {
-  return getAllPlayers().filter((player) => player.alive);
-}
-
-// Get alive human players only
-function getAliveHumanPlayers() {
-  return getHumanPlayers().filter((player) => player.alive);
-}
-
-// Get alive bot players only
-function getAliveBots() {
-  return getBotPlayers().filter((player) => player.alive);
-}
 
 console.log("🚀 Network optimization agents initialized");
 console.log(
@@ -620,177 +573,207 @@ console.log(
 );
 
 // Optimized game state broadcast with spatial culling and relevancy scoring
-// function broadcastOptimizedGameState(
-//   targetPlayerId = null,
-//   eventType = "gameUpdate"
-// ) {
-//   const currentTime = Date.now();
+function broadcastOptimizedGameState(
+  targetPlayerId = null,
+  eventType = "gameUpdate"
+) {
+  const currentTime = Date.now();
 
-//   // Get all connected players
-//   const connectedPlayers = getAlivePlayers();
+  // Get all connected players
+  const connectedPlayers = Array.from(gameState.players.values()).filter(
+    (p) => p.alive
+  );
 
-//   connectedPlayers.forEach((player) => {
-//     // Skip if targeting specific player and this isn't the target
-//     if (targetPlayerId && player.id !== targetPlayerId) return;
+  connectedPlayers.forEach((player) => {
+    // Skip if targeting specific player and this isn't the target
+    if (targetPlayerId && player.id !== targetPlayerId) return;
 
-//     // Apply per-player rate limiting
-//     if (!shouldSendUpdateToPlayer(player.id)) {
-//       return;
-//     }
+    // Apply per-player rate limiting
+    if (!shouldSendUpdateToPlayer(player.id)) {
+      return;
+    }
 
-//     const viewport = clientViewports.get(player.id);
-//     if (!viewport) {
-//       // Fallback to full game state for players without viewport data
-//       const fallbackData = {
-//         players: connectedPlayers,
-//         foods: gameState.foods,
-//         deadPoints: gameState.deadPoints,
-//       };
+    const viewport = clientViewports.get(player.id);
+    if (!viewport) {
+      // Fallback to full game state for players without viewport data
+      const fallbackData = {
+        players: connectedPlayers,
+        foods: gameState.foods,
+        deadPoints: gameState.deadPoints,
+      };
 
-//       // Send fallback data as JSON (with rate limiting already applied)
-//       // io.to(player.socketId).emit("gameUpdate", fallbackData);
-//       return;
-//     }
+      // Use binary protocol for fallback as well (with rate limiting already applied)
+      const optimizedFallback = binaryProtocol.createOptimizedGameState(
+        player.id,
+        fallbackData
+      );
+      const binaryFallback = binaryProtocol.serialize(optimizedFallback);
+      io.to(player.socketId).emit("binaryGameUpdate", binaryFallback);
+      return;
+    }
 
-//     // Use spatial partitioning to get relevant objects
-//     const relevantPlayers = spatialAgent.getObjectsInViewport(
-//       viewport.x,
-//       viewport.y,
-//       viewport.width,
-//       viewport.height,
-//       ["players"]
-//     );
+    // Use spatial partitioning to get relevant objects
+    const relevantPlayers = spatialAgent.getObjectsInViewport(
+      viewport.x,
+      viewport.y,
+      viewport.width,
+      viewport.height,
+      ["players"]
+    );
 
-//     const relevantFoods = spatialAgent.getObjectsInViewport(
-//       viewport.x,
-//       viewport.y,
-//       viewport.width,
-//       viewport.height,
-//       ["foods"]
-//     );
+    const relevantFoods = spatialAgent.getObjectsInViewport(
+      viewport.x,
+      viewport.y,
+      viewport.width,
+      viewport.height,
+      ["foods"]
+    );
 
-//     const relevantDeadPoints = spatialAgent.getObjectsInViewport(
-//       viewport.x,
-//       viewport.y,
-//       viewport.width,
-//       viewport.height,
-//       ["deadPoints"]
-//     );
+    const relevantDeadPoints = spatialAgent.getObjectsInViewport(
+      viewport.x,
+      viewport.y,
+      viewport.width,
+      viewport.height,
+      ["deadPoints"]
+    );
 
-//     // Apply relevancy scoring with lower thresholds for better optimization
-//     const scoredPlayers = relevancyAgent
-//       .scoreObjects(
-//         relevantPlayers,
-//         viewport.playerX,
-//         viewport.playerY,
-//         "players"
-//       )
-//       .filter((obj) => obj.score > 0.01); // Lower threshold for players
+    // Apply relevancy scoring with lower thresholds for better optimization
+    const scoredPlayers = relevancyAgent
+      .scoreObjects(
+        relevantPlayers,
+        viewport.playerX,
+        viewport.playerY,
+        "players"
+      )
+      .filter((obj) => obj.score > 0.01); // Lower threshold for players
 
-//     const scoredFoods = relevancyAgent
-//       .scoreObjects(relevantFoods, viewport.playerX, viewport.playerY, "foods")
-//       .filter((obj) => obj.score > 0.005); // Lower threshold for foods
+    const scoredFoods = relevancyAgent
+      .scoreObjects(relevantFoods, viewport.playerX, viewport.playerY, "foods")
+      .filter((obj) => obj.score > 0.005); // Lower threshold for foods
 
-//     const scoredDeadPoints = relevancyAgent
-//       .scoreObjects(
-//         relevantDeadPoints,
-//         viewport.playerX,
-//         viewport.playerY,
-//         "deadPoints"
-//       )
-//       .filter((obj) => obj.score > 0.005); // Lower threshold for dead points
+    const scoredDeadPoints = relevancyAgent
+      .scoreObjects(
+        relevantDeadPoints,
+        viewport.playerX,
+        viewport.playerY,
+        "deadPoints"
+      )
+      .filter((obj) => obj.score > 0.005); // Lower threshold for dead points
 
-//     // Get adaptive update frequency from network agent
-//     const playerData = {
-//       x: viewport.playerX,
-//       y: viewport.playerY,
-//       velocityX: player.velocityX || 0,
-//       velocityY: player.velocityY || 0,
-//       lastActionTime: player.lastActionTime || currentTime,
-//       alive: player.alive,
-//     };
+    // Get adaptive update frequency from network agent
+    const playerData = {
+      x: viewport.playerX,
+      y: viewport.playerY,
+      velocityX: player.velocityX || 0,
+      velocityY: player.velocityY || 0,
+      lastActionTime: player.lastActionTime || currentTime,
+      alive: player.alive,
+    };
 
-//     const serverMetrics = {
-//       playerCount: connectedPlayers.length,
-//       objectCount: gameState.foods.length + gameState.deadPoints.length,
-//     };
+    const serverMetrics = {
+      playerCount: connectedPlayers.length,
+      objectCount: gameState.foods.length + gameState.deadPoints.length,
+    };
 
-//     const allGameObjects = [
-//       ...relevantPlayers,
-//       ...relevantFoods,
-//       ...relevantDeadPoints,
-//     ];
-//     const updateFreq = networkAgent.getUpdateFrequency(
-//       player.id,
-//       playerData,
-//       allGameObjects,
-//       serverMetrics
-//     );
-//     const shouldUpdate = currentTime - (player.lastUpdate || 0) >= updateFreq;
+    const allGameObjects = [
+      ...relevantPlayers,
+      ...relevantFoods,
+      ...relevantDeadPoints,
+    ];
+    const updateFreq = networkAgent.getUpdateFrequency(
+      player.id,
+      playerData,
+      allGameObjects,
+      serverMetrics
+    );
+    const shouldUpdate = currentTime - (player.lastUpdate || 0) >= updateFreq;
 
-//     if (shouldUpdate) {
-//       // Create optimized game state with delta compression
-//       const gameStateData = {
-//         players: scoredPlayers.map((obj) => obj.object),
-//         foods: scoredFoods.map((obj) => obj.object),
-//         deadPoints: scoredDeadPoints.map((obj) => obj.object),
-//         viewport: {
-//           x: viewport.x,
-//           y: viewport.y,
-//           width: viewport.width,
-//           height: viewport.height,
-//         },
-//       };
+    if (shouldUpdate) {
+      // Create optimized game state with delta compression
+      const gameStateData = {
+        players: scoredPlayers.map((obj) => obj.object),
+        foods: scoredFoods.map((obj) => obj.object),
+        deadPoints: scoredDeadPoints.map((obj) => obj.object),
+        viewport: {
+          x: viewport.x,
+          y: viewport.y,
+          width: viewport.width,
+          height: viewport.height,
+        },
+      };
 
-//       // Send game state data as JSON (msgpack parser will handle compression)
-//       // io.to(player.socketId).emit("gameUpdate", gameStateData);
+      // Use enhanced binary protocol with delta compression
+      const optimizedData = binaryProtocol.createOptimizedGameState(
+        player.id,
+        gameStateData
+      );
 
-//       // Track bandwidth usage per player
-//       if (!player.bandwidthStats) {
-//         player.bandwidthStats = {
-//           totalBytes: 0,
-//           updateCount: 0,
-//           startTime: currentTime,
-//           deltaUpdates: 0,
-//           fullUpdates: 0,
-//         };
-//       }
-//       // Estimate data size for tracking (msgpack will compress)
-//       const estimatedSize = JSON.stringify(gameStateData).length;
-//       player.bandwidthStats.totalBytes += estimatedSize;
-//       player.bandwidthStats.updateCount++;
-//       player.bandwidthStats.fullUpdates++;
+      // Send binary data with compression tracking
+      const binaryData = binaryProtocol.serialize(optimizedData);
+      io.to(player.socketId).emit("binaryGameUpdate", binaryData);
 
-//       player.lastUpdate = currentTime;
+      // Track bandwidth usage per player
+      if (!player.bandwidthStats) {
+        player.bandwidthStats = {
+          totalBytes: 0,
+          updateCount: 0,
+          startTime: currentTime,
+          deltaUpdates: 0,
+          fullUpdates: 0,
+        };
+      }
+      player.bandwidthStats.totalBytes += binaryData.length;
+      player.bandwidthStats.updateCount++;
 
-//       // Log enhanced optimization stats (reduced frequency)
-//       if (Math.random() < 0.05) {
-//         // Only log 5% of updates to reduce spam
-//         const originalCount =
-//           connectedPlayers.length +
-//           gameState.foods.length +
-//           gameState.deadPoints.length;
-//         const optimizedCount =
-//           scoredPlayers.length + scoredFoods.length + scoredDeadPoints.length;
-//         const spatialReduction = (
-//           ((originalCount - optimizedCount) / originalCount) *
-//           100
-//         ).toFixed(1);
+      // Track update type
+      if (optimizedData.type === "delta") {
+        player.bandwidthStats.deltaUpdates++;
+      } else {
+        player.bandwidthStats.fullUpdates++;
+      }
 
-//         const timeElapsed =
-//           (currentTime - player.bandwidthStats.startTime) / 1000;
-//         const bytesPerSecond =
-//           timeElapsed > 0 ? player.bandwidthStats.totalBytes / timeElapsed : 0;
+      player.lastUpdate = currentTime;
 
-//         console.log(`🚀 Optimized Update [${player.id}]:`, {
-//           spatial: `${spatialReduction}% reduction (${originalCount}→${optimizedCount})`,
-//           bandwidth: `${(bytesPerSecond / 1024).toFixed(1)} KB/s`,
-//           fps: currentRenderFPS,
-//         });
-//       }
-//     }
-//   });
-// }
+      // Log enhanced optimization stats (reduced frequency)
+      if (Math.random() < 0.05) {
+        // Only log 5% of updates to reduce spam
+        const originalCount =
+          connectedPlayers.length +
+          gameState.foods.length +
+          gameState.deadPoints.length;
+        const optimizedCount =
+          scoredPlayers.length + scoredFoods.length + scoredDeadPoints.length;
+        const spatialReduction = (
+          ((originalCount - optimizedCount) / originalCount) *
+          100
+        ).toFixed(1);
+
+        const binaryStats = binaryProtocol.getStats();
+        const timeElapsed =
+          (currentTime - player.bandwidthStats.startTime) / 1000;
+        const bytesPerSecond =
+          timeElapsed > 0 ? player.bandwidthStats.totalBytes / timeElapsed : 0;
+        const deltaRatio =
+          player.bandwidthStats.updateCount > 0
+            ? (
+                (player.bandwidthStats.deltaUpdates /
+                  player.bandwidthStats.updateCount) *
+                100
+              ).toFixed(1)
+            : 0;
+
+        console.log(`🚀 Enhanced Binary Update [${player.id}]:`, {
+          spatial: `${spatialReduction}% reduction (${originalCount}→${optimizedCount})`,
+          binary: `${binaryStats.compressionRatio.toFixed(1)}% compression`,
+          deltas: `${deltaRatio}% delta updates`,
+          bandwidth: `${(bytesPerSecond / 1024).toFixed(1)} KB/s`,
+          updateType: optimizedData.type,
+          fps: currentRenderFPS,
+        });
+      }
+    }
+  });
+}
 
 // Update spatial partitioning with current game objects
 function updateSpatialPartitioning() {
@@ -824,6 +807,10 @@ function updateSpatialPartitioning() {
 // Initialize food
 function initializeFoods() {
   gameState.foods = [];
+  // console.log(
+  //   `🍎 Initializing ${gameState.maxFoods} food items in ${gameState.worldWidth}x${gameState.worldHeight} world...`
+  // );
+
   // Wall thickness from client GameEngine.ts drawBoundary method (default lineWidth = 16)
   const wallThickness = 8; // Half of lineWidth (16/2) since walls are centered on boundary
 
@@ -883,6 +870,8 @@ function checkForStuckPlayers() {
 
       // Reset stuck timer if player was stuck
       if (player.stuckTracking.stuckStartTime) {
+        const stuckDuration = currentTime - player.stuckTracking.stuckStartTime;
+
         // Broadcast that player is no longer stuck
         io.emit("playerStuckWarning", {
           playerId: player.id,
@@ -974,8 +963,18 @@ function checkForStuckPlayers() {
               // Broadcast player disconnected (this will remove the snake from client view)
               io.emit("playerDisconnected", player.id);
 
+              // Also broadcast player left for consistency
+              io.emit("playerLeft", {
+                playerId: player.id,
+              });
+
               // Update leaderboard after player removal
-              updateLeaderboard();
+              const leaderboard = generateLeaderboard();
+              const fullLeaderboard = generateFullLeaderboard();
+              io.emit("leaderboardUpdate", {
+                leaderboard: leaderboard,
+                fullLeaderboard: fullLeaderboard,
+              });
             }
             return; // Skip further processing for this player
           } else {
@@ -1007,7 +1006,7 @@ function startOptimizedGameLoop() {
     checkForStuckPlayers();
 
     // Broadcast optimized game state to all players with rate limiting
-    // broadcastOptimizedGameState(null, "gameUpdate");
+    broadcastOptimizedGameState(null, "gameUpdate");
 
     // Update predictive agent predictions
     predictiveAgent.updatePredictions();
@@ -1090,7 +1089,7 @@ function getPointValueByType(type) {
     case "orange":
       return 12;
     case "grapes":
-      return 15;
+      return 100;
     default:
       return POINT;
   }
@@ -1293,6 +1292,7 @@ function generateOptimalFoodDistribution(
   // Enhanced spacing algorithm for better snake body coverage
   const newFoodItems = [];
   const timestamp = Date.now();
+  let foodIndex = 0;
 
   // Calculate adaptive spacing based on snake size and food count
   const segmentIndices = [];
@@ -1457,11 +1457,21 @@ function getSpawnZones() {
       zones.push({ x: finalX, y: finalY, size: zoneSize });
     }
   }
+
+  // Validate zone distribution
+  // const minX = Math.min(...zones.map((z) => z.x));
+  // const maxX = Math.max(...zones.map((z) => z.x));
+  // const minY = Math.min(...zones.map((z) => z.y));
+  // const maxY = Math.max(...zones.map((z) => z.y));
   return zones;
 }
 
 // Check if position is safe (no collision with existing worms) - enhanced safety checks
 function isPositionSafe(x, y, radius, minDistance = 200) {
+  const alivePlayers = Array.from(gameState.players.values()).filter(
+    (p) => p.alive
+  );
+
   // Check boundaries with increased buffer for better safety
   const boundaryBuffer = 80;
   if (
@@ -1565,9 +1575,9 @@ function findSafeSpawnPosition(radius) {
 
   // Prioritize zones with fewer nearby players for better distribution
   const zonesWithPlayerCount = spawnZones.map((zone) => {
-    const nearbyPlayers = getAlivePlayers().filter(
-      (p) => Math.hypot(p.x - zone.x, p.y - zone.y) < 300
-    ).length;
+    const nearbyPlayers = Array.from(gameState.players.values())
+      .filter((p) => p.alive)
+      .filter((p) => Math.hypot(p.x - zone.x, p.y - zone.y) < 300).length;
     return { zone, nearbyPlayers, index: spawnZones.indexOf(zone) };
   });
 
@@ -1869,7 +1879,9 @@ function addBotsToSpawnQueue(count) {
   const currentTime = Date.now();
 
   // Count current bots (both alive and dead)
-  const currentBots = getBotPlayers().length;
+  const currentBots = Array.from(gameState.players.values()).filter(
+    (p) => p.isBot
+  ).length;
   const availableSlots = MAX_BOTS - currentBots;
   const botsToSpawn = Math.min(count, availableSlots);
 
@@ -1948,7 +1960,9 @@ function processBotSpawnQueue() {
 
 // Spawn a single bot (extracted from original spawnBots function)
 function spawnSingleBot(botId) {
-  const currentBots = getBotPlayers().length;
+  const currentBots = Array.from(gameState.players.values()).filter(
+    (p) => p.isBot
+  ).length;
 
   // Double-check bot limit before spawning
   if (currentBots >= MAX_BOTS) {
@@ -1958,12 +1972,8 @@ function spawnSingleBot(botId) {
   const bot = createBot(botId);
   gameState.players.set(botId, bot);
 
-  updateLeaderboard();
-
   // Broadcast new bot to all players
   io.emit("playerJoined", bot);
-  // Update leaderboard after bot spawn
-  updateLeaderboard();
 }
 
 // Legacy function for backward compatibility - now uses debounced system
@@ -2029,15 +2039,27 @@ function handleBotDeath(bot, killerId = null) {
   // Broadcast bot removal (this will remove the snake from client view)
   io.emit("playerDisconnected", bot.id);
 
+  // Also broadcast player left for consistency
+  io.emit("playerLeft", {
+    playerId: bot.id,
+  });
+
   // Update leaderboard after bot removal
-  updateLeaderboard();
+  const leaderboard = generateLeaderboard();
+  const fullLeaderboard = generateFullLeaderboard();
+  io.emit("leaderboardUpdate", {
+    leaderboard: leaderboard,
+    fullLeaderboard: fullLeaderboard,
+  });
 }
 
 // ===== SERVER STATE MANAGEMENT FUNCTIONS =====
 
 // Check if server should be paused (no human players)
 function shouldPauseServer() {
-  const humanPlayers = getAliveHumanPlayers();
+  const humanPlayers = Array.from(gameState.players.values()).filter(
+    (p) => !p.isBot && p.alive
+  );
   return humanPlayers.length === 0;
 }
 
@@ -2055,7 +2077,9 @@ function pauseServer() {
   gameLoopIntervals = [];
 
   // Keep minimal bot count during pause
-  const currentBots = getBotPlayers();
+  const currentBots = Array.from(gameState.players.values()).filter(
+    (p) => p.isBot
+  );
   const botsToRemove = currentBots.length - PERFORMANCE_CONFIG.MIN_BOTS_IDLE;
 
   if (botsToRemove > 0) {
@@ -2066,9 +2090,9 @@ function pauseServer() {
       gameState.players.delete(bot.id);
       io.emit("playerDisconnected", bot.id);
     }
-    // console.log(
-    //   `🤖 SERVER: Removed ${botsToRemove} bots during pause (keeping ${PERFORMANCE_CONFIG.MIN_BOTS_IDLE})`
-    // );
+    console.log(
+      `🤖 SERVER: Removed ${botsToRemove} bots during pause (keeping ${PERFORMANCE_CONFIG.MIN_BOTS_IDLE})`
+    );
   }
 
   // Start idle game loop with reduced frequency
@@ -2095,7 +2119,9 @@ function resumeServer() {
   }
 
   // Ensure minimum active bots
-  const currentBots = getBotPlayers();
+  const currentBots = Array.from(gameState.players.values()).filter(
+    (p) => p.isBot
+  );
   const botsNeeded = PERFORMANCE_CONFIG.MIN_BOTS_ACTIVE - currentBots.length;
 
   if (botsNeeded > 0) {
@@ -2146,10 +2172,9 @@ function performFoodCleanup(targetReduction = 50) {
   const regularFoods = gameState.foods.filter((f) => !f.isScoreGenerated);
 
   // Get current player positions for distance calculations
-  const playerPositions = getAliveHumanPlayers().map((p) => ({
-    x: p.x,
-    y: p.y,
-  }));
+  const playerPositions = Array.from(gameState.players.values())
+    .filter((p) => p.alive)
+    .map((p) => ({ x: p.x, y: p.y }));
 
   // Add timestamps to food items if missing and calculate cleanup priority
   const currentTime = Date.now();
@@ -2210,11 +2235,11 @@ function performFoodCleanup(targetReduction = 50) {
       regularFoods.length
     );
 
-    // console.log(
-    //   `🧹 HIGH CAPACITY (${(capacityPercentage * 100).toFixed(
-    //     1
-    //   )}%): Removing ${totalToRemove} foods (60% score-generated: ${scoreGeneratedToRemove}, 40% regular: ${regularFoodsToRemove})`
-    // );
+    console.log(
+      `🧹 HIGH CAPACITY (${(capacityPercentage * 100).toFixed(
+        1
+      )}%): Removing ${totalToRemove} foods (60% score-generated: ${scoreGeneratedToRemove}, 40% regular: ${regularFoodsToRemove})`
+    );
   } else {
     // Below 94%, maintain 60/40 ratio for balanced cleanup
     const totalToRemove = Math.min(
@@ -2397,7 +2422,9 @@ function performSmartDeadPointCleanup(forceCleanup = false) {
   pointsToRemove = Math.min(pointsToRemove, maxRemovalPerCleanup);
 
   // Separate human and bot players for enhanced priority calculation
-  const alivePlayers = getAlivePlayers();
+  const alivePlayers = Array.from(gameState.players.values()).filter(
+    (p) => p.alive
+  );
   const humanPlayerPositions = alivePlayers
     .filter((p) => !p.isBot)
     .map((p) => ({ x: p.x, y: p.y }));
@@ -2468,11 +2495,40 @@ function performSmartDeadPointCleanup(forceCleanup = false) {
   // Update metrics
   performanceMetrics.deadPointsCleanedUp += actualPointsToRemove;
 
-  // Dead points cleanup completed (removed unused broadcast)
+  // Broadcast cleanup to clients if significant (with reduced threshold)
+  if (actualPointsToRemove > 500) {
+    io.emit("deadPointsCleanup", {
+      removedCount: actualPointsToRemove,
+      remainingCount: gameState.deadPoints.length,
+    });
+  }
+}
+
+// Enhanced dead point creation with timestamp
+function createDeadPoint(x, y, radius, color) {
+  const deadPoint = {
+    x,
+    y,
+    radius,
+    color,
+    createdAt: Date.now(),
+  };
+
+  gameState.deadPoints.push(deadPoint);
+  performanceMetrics.deadPointsCreated++;
+  updatePeakMetrics();
+
+  return deadPoint;
 }
 
 function updateBots() {
   // Check if there are any human players in the room
+  const humanPlayers = Array.from(gameState.players.values()).filter(
+    (p) => !p.isBot && p.alive
+  );
+
+  const allBots = Array.from(gameState.players.values()).filter((p) => p.isBot);
+  const aliveBots = allBots.filter((p) => p.alive);
 
   // Debug bot status every 10 seconds
   if (
@@ -2483,7 +2539,7 @@ function updateBots() {
   }
 
   // If no human players, don't update bots at all
-  if (getAliveHumanPlayers().length === 0) {
+  if (humanPlayers.length === 0) {
     return;
   }
 
@@ -2809,6 +2865,11 @@ function updateBots() {
     // Relaxed boundary collision detection - give bots small buffer to prevent excessive deaths
     if (newX < minX || newX > maxX || newY < minY || newY > maxY) {
       // Bot dies from boundary collision - relaxed enforcement with buffer
+      console.log(
+        `Bot ${player.id} died at boundary: position (${newX.toFixed(
+          2
+        )}, ${newY.toFixed(2)}), bounds: x[${minX}-${maxX}], y[${minY}-${maxY}]`
+      );
       handleBotDeath(player);
       return;
     }
@@ -2894,13 +2955,7 @@ function updateBots() {
         player.score += pointValue;
 
         // Add multiple segments based on food point value (1 segment = 10 points)
-        const pointSegment =
-          pointValue >= 1100 ? Math.floor(pointValue * SNAKE_SEGMENT_SCALE) : SNAKE_SEGMENT_DEFAULT;
-
-        const segmentsToAdd = Math.max(
-          1,
-          Math.floor(pointValue / pointSegment)
-        );
+        const segmentsToAdd = Math.max(1, Math.floor(pointValue / 10));
         console.log(
           `🤖 Bot ${player.id} eating ${eatentype}: ${pointValue} points = ${segmentsToAdd} segments`
         );
@@ -2939,13 +2994,18 @@ function updateBots() {
         io.emit("foodRegenerated", food);
 
         // Broadcast score update
-        // io.emit("scoreUpdate", {
-        //   playerId: player.id,
-        //   score: Math.round(player.score * 10) / 10,
-        // });
+        io.emit("scoreUpdate", {
+          playerId: player.id,
+          score: Math.round(player.score * 10) / 10,
+        });
 
         // Broadcast updated leaderboard
-        updateLeaderboard();
+        const leaderboard = generateLeaderboard();
+        const fullLeaderboard = generateFullLeaderboard();
+        io.emit("leaderboardUpdate", {
+          leaderboard: leaderboard,
+          fullLeaderboard: fullLeaderboard,
+        });
 
         break; // Only eat one food per update cycle
       }
@@ -2968,17 +3028,11 @@ function updateBots() {
           // Bot eats dead point - award points based on food type
           player.score += pointValue;
 
-          const pointSegment =
-            pointValue >= 1100 ? Math.floor(pointValue * SNAKE_SEGMENT_SCALE) : SNAKE_SEGMENT_DEFAULT;
-
           // Add multiple segments based on dead point value (1 segment = 10 points)
-          const segmentsToAdd = Math.max(
-            1,
-            Math.floor(pointValue / pointSegment)
+          const segmentsToAdd = Math.max(1, Math.floor(pointValue / 10));
+          console.log(
+            `🤖 Bot ${player.id} eating dead point ${deadPointType}: ${pointValue} points = ${segmentsToAdd} segments`
           );
-          // console.log(
-          //   `🤖 Bot ${player.id} eating dead point ${deadPointType}: ${pointValue} points = ${segmentsToAdd} segments`
-          // );
 
           if (player.points.length > 0) {
             const tail = player.points[player.points.length - 1];
@@ -3006,17 +3060,29 @@ function updateBots() {
           });
 
           // Broadcast score update
-          // io.emit("scoreUpdate", {
-          //   playerId: player.id,
-          //   score: Math.round(player.score * 10) / 10,
-          // });
+          io.emit("scoreUpdate", {
+            playerId: player.id,
+            score: Math.round(player.score * 10) / 10,
+          });
 
           // Broadcast updated leaderboard
-          updateLeaderboard();
+          const leaderboard = generateLeaderboard();
+          const fullLeaderboard = generateFullLeaderboard();
+          io.emit("leaderboardUpdate", {
+            leaderboard: leaderboard,
+            fullLeaderboard: fullLeaderboard,
+          });
 
           break; // Only eat one dead point per update cycle
         } else {
           // Dead point is protected due to age
+          console.log(
+            `🛡️ Bot ${
+              player.id
+            } attempted to eat protected dead point (age: ${Math.round(
+              age / 1000
+            )}s < ${CLEANUP_INTERVAL / 1000}s)`
+          );
         }
       }
     }
@@ -3025,6 +3091,39 @@ function updateBots() {
 
 // Initialize game
 initializeFoods();
+
+// TEMPORARY: Test function to force bot death and create dead snake food
+function testDeadSnakeFood() {
+  console.log(
+    "🧪 TESTING: Forcing bot death to test dead snake food animation"
+  );
+  const bots = Array.from(gameState.players.values()).filter(
+    (p) => p.isBot && p.alive
+  );
+  if (bots.length > 0) {
+    const testBot = bots[0];
+    console.log(
+      `🧪 TESTING: Killing bot ${testBot.id} at position (${testBot.x}, ${testBot.y}) with score ${testBot.score}`
+    );
+    handleBotDeath(testBot);
+  } else {
+    console.log("🧪 TESTING: No alive bots found to kill");
+  }
+}
+
+// TEMPORARY: Auto-trigger test after 10 seconds
+// setTimeout(() => {
+//   testDeadSnakeFood();
+// }, 10000);
+// // console.log(
+//   `🎮 Game initialized: ${gameState.foods.length} foods spawned in ${gameState.worldWidth}x${gameState.worldHeight} world`
+// );
+
+// Spawn initial bots for testing
+setTimeout(() => {
+  console.log("🤖 Spawning initial bots for game testing...");
+  spawnBots(5);
+}, 1000);
 
 io.on("connection", (socket) => {
   console.log("Player connected:", socket.id);
@@ -3045,7 +3144,15 @@ io.on("connection", (socket) => {
     const authenticatedOpenId = socket.data.openId;
     const authenticatedUserInfo = socket.data.userInfo;
 
+    // console.log("🎮 Game initialization:", {
+    //   socketId: socket.id,
+    //   isAuthenticated,
+    //   hasAuthData: !!authenticatedUserData,
+    //   fallbackData: !!userData,
+    // });
+
     // Prioritize authenticated data, fallback to provided userData
+    const finalUserData = isAuthenticated ? authenticatedUserData : userData;
     const finalOpenId = isAuthenticated
       ? authenticatedOpenId
       : userData?.openId;
@@ -3065,6 +3172,17 @@ io.on("connection", (socket) => {
       safePosition.y,
       playerRadius
     );
+
+    // console.log(
+    //   `👤 DEBUG: Creating player ${playerId} (${
+    //     userName || "Anonymous"
+    //   }) at position (${safePosition.x.toFixed(2)}, ${safePosition.y.toFixed(
+    //     2
+    //   )}) with safe angle ${safeAngle.toFixed(3)} radians (${(
+    //     (safeAngle * 180) /
+    //     Math.PI
+    //   ).toFixed(1)}°)`
+    // );
 
     const newPlayer = {
       id: playerId,
@@ -3115,7 +3233,9 @@ io.on("connection", (socket) => {
     updatePlayerActivity();
 
     // Automatically spawn 5 bots when a user connects (if not already present)
-    const humanPlayers = getHumanPlayers();
+    const humanPlayers = Array.from(gameState.players.values()).filter(
+      (p) => !p.isBot
+    );
     if (humanPlayers.length === 1) {
       // First human player
       spawnBots(3);
@@ -3128,7 +3248,7 @@ io.on("connection", (socket) => {
     socket.emit("gameInit", {
       playerId: playerId,
       gameState: {
-        players: getAllPlayers(),
+        players: Array.from(gameState.players.values()),
         foods: gameState.foods,
         deadPoints: gameState.deadPoints,
         worldWidth: gameState.worldWidth,
@@ -3137,18 +3257,28 @@ io.on("connection", (socket) => {
     });
 
     // Start sending optimized updates to this player
-    // setTimeout(() => {
-    //   broadcastOptimizedGameState(playerId, "gameUpdate");
-    // }, 1000); // Give client time to set up viewport tracking
+    setTimeout(() => {
+      broadcastOptimizedGameState(playerId, "gameUpdate");
+    }, 1000); // Give client time to set up viewport tracking
 
     // Send initial leaderboard to new player
-    sendLeaderboardToSocket(socket);
+    const initialLeaderboard = generateLeaderboard();
+    const initialFullLeaderboard = generateFullLeaderboard();
+    socket.emit("leaderboardUpdate", {
+      leaderboard: initialLeaderboard,
+      fullLeaderboard: initialFullLeaderboard,
+    });
 
     // Broadcast new player to all other players
     socket.broadcast.emit("playerJoined", newPlayer);
 
     // Broadcast updated leaderboard to all players
-    updateLeaderboard();
+    const updatedLeaderboard = generateLeaderboard();
+    const updatedFullLeaderboard = generateFullLeaderboard();
+    io.emit("leaderboardUpdate", {
+      leaderboard: updatedLeaderboard,
+      fullLeaderboard: updatedFullLeaderboard,
+    });
   });
 
   // Handle player movement
@@ -3178,6 +3308,9 @@ io.on("connection", (socket) => {
         currentTime - player.spawnTime >= spawnProtectionDuration
       ) {
         player.spawnProtection = false;
+        console.log(
+          `🛡️ DEBUG: Spawn protection removed for player ${data.playerId} during movement`
+        );
       }
 
       // Broadcast movement to all other players with current spawn protection status
@@ -3222,11 +3355,11 @@ io.on("connection", (socket) => {
         Date.now()
       );
 
-      // console.log(
-      //   `🔍 Viewport updated for ${playerId}: (${x?.toFixed(1) || "N/A"}, ${
-      //     y?.toFixed(1) || "N/A"
-      //   }) ${width?.toFixed(1) || "N/A"}x${height?.toFixed(1) || "N/A"}`
-      // );
+      console.log(
+        `🔍 Viewport updated for ${playerId}: (${x?.toFixed(1) || "N/A"}, ${
+          y?.toFixed(1) || "N/A"
+        }) ${width?.toFixed(1) || "N/A"}x${height?.toFixed(1) || "N/A"}`
+      );
     }
   });
 
@@ -3278,13 +3411,18 @@ io.on("connection", (socket) => {
       });
 
       // Broadcast score update
-      // io.emit("scoreUpdate", {
-      //   playerId: playerId,
-      //   score: Math.round(player.score * 10) / 10,
-      // });
+      io.emit("scoreUpdate", {
+        playerId: playerId,
+        score: Math.round(player.score * 10) / 10,
+      });
 
       // Broadcast updated leaderboard
-      updateLeaderboard();
+      const leaderboard = generateLeaderboard();
+      const fullLeaderboard = generateFullLeaderboard();
+      io.emit("leaderboardUpdate", {
+        leaderboard: leaderboard,
+        fullLeaderboard: fullLeaderboard,
+      });
     }
   });
 
@@ -3356,19 +3494,25 @@ io.on("connection", (socket) => {
       // Only broadcast score and leaderboard updates if points were actually consumed
       if (consumedCount > 0) {
         // Broadcast score update
-        // io.emit("scoreUpdate", {
-        //   playerId: playerId,
-        //   score: player.score,
-        // });
+        io.emit("scoreUpdate", {
+          playerId: playerId,
+          score: player.score,
+        });
 
         // Broadcast updated leaderboard
-        updateLeaderboard();
+        const leaderboard = generateLeaderboard();
+        const fullLeaderboard = generateFullLeaderboard();
+        io.emit("leaderboardUpdate", {
+          leaderboard: leaderboard,
+          fullLeaderboard: fullLeaderboard,
+        });
       }
     }
   });
 
   // Handle player death - optimized for performance
   socket.on("playerDied", (data) => {
+    const startTime = performance.now();
     const player = gameState.players.get(data.playerId);
     if (!player) return;
 
@@ -3395,6 +3539,8 @@ io.on("connection", (socket) => {
 
     // Remove dead player from spatial partitioning
     spatialAgent.removeObject(player.id);
+
+    const endTime = performance.now();
 
     // Single broadcast for all death-related updates
     io.emit("playerDied", {
@@ -3427,7 +3573,12 @@ io.on("connection", (socket) => {
       io.emit("playerDisconnected", data.playerId);
 
       // Update leaderboard after bot removal
-      updateLeaderboard();
+      const leaderboard = generateLeaderboard();
+      const fullLeaderboard = generateFullLeaderboard();
+      io.emit("leaderboardUpdate", {
+        leaderboard: leaderboard,
+        fullLeaderboard: fullLeaderboard,
+      });
     } else {
       // Respawn human player after 3 seconds
       setTimeout(() => {
@@ -3486,7 +3637,9 @@ io.on("connection", (socket) => {
   socket.on("requestMinimumPlayers", (data) => {
     const { minPlayers } = data;
     const currentPlayerCount = gameState.players.size;
-    const currentBots = getBotPlayers().length;
+    const currentBots = Array.from(gameState.players.values()).filter(
+      (p) => p.isBot
+    ).length;
 
     if (currentPlayerCount < minPlayers) {
       const botsNeeded = minPlayers - currentPlayerCount;
@@ -3503,10 +3656,10 @@ io.on("connection", (socket) => {
       }
 
       // Broadcast updated game state to all players
-      // io.emit("gameStats", {
-      //   playerCount: gameState.players.size,
-      //   foodCount: gameState.foods.length,
-      // });
+      io.emit("gameStats", {
+        playerCount: gameState.players.size,
+        foodCount: gameState.foods.length,
+      });
     }
   });
 
@@ -3519,9 +3672,17 @@ io.on("connection", (socket) => {
       spatialAgent.removeObject(player.id);
       gameState.players.delete(data.playerId);
       io.emit("playerDisconnected", data.playerId);
+      socket.broadcast.emit("playerLeft", {
+        playerId: data.playerId,
+      });
 
       // Broadcast updated leaderboard after player leaves
-      updateLeaderboard();
+      const leaderboard = generateLeaderboard();
+      const fullLeaderboard = generateFullLeaderboard();
+      io.emit("leaderboardUpdate", {
+        leaderboard: leaderboard,
+        fullLeaderboard: fullLeaderboard,
+      });
 
       console.log("Player", data.playerId, "successfully left the room");
     }
@@ -3555,7 +3716,7 @@ io.on("connection", (socket) => {
           playerId: disconnectedPlayerId,
           playerName:
             player.userName || `Player ${disconnectedPlayerId.substring(0, 6)}`,
-          warningMessage: "Player disconnected",
+          warningMessage: "Player disconnected - will become food in 4 seconds",
         });
 
         // Set timeout to handle the disconnect after 4 seconds
@@ -3605,8 +3766,18 @@ io.on("connection", (socket) => {
             // Broadcast player disconnected (this will remove the snake from client view)
             io.emit("playerDisconnected", disconnectedPlayerId);
 
+            // Also broadcast player left for consistency
+            io.emit("playerLeft", {
+              playerId: disconnectedPlayerId,
+            });
+
             // Broadcast updated leaderboard after player leaves
-            updateLeaderboard();
+            const leaderboard = generateLeaderboard();
+            const fullLeaderboard = generateFullLeaderboard();
+            io.emit("leaderboardUpdate", {
+              leaderboard: leaderboard,
+              fullLeaderboard: fullLeaderboard,
+            });
           }
         }, 4000); // 4 second delay
       } else if (player && !player.alive) {
@@ -3616,9 +3787,17 @@ io.on("connection", (socket) => {
         performanceMetrics.playerDisconnections++;
         updatePeakMetrics();
         io.emit("playerDisconnected", disconnectedPlayerId);
+        socket.broadcast.emit("playerLeft", {
+          playerId: disconnectedPlayerId,
+        });
 
         // Broadcast updated leaderboard after player leaves
-        updateLeaderboard();
+        const leaderboard = generateLeaderboard();
+        const fullLeaderboard = generateFullLeaderboard();
+        io.emit("leaderboardUpdate", {
+          leaderboard: leaderboard,
+          fullLeaderboard: fullLeaderboard,
+        });
       }
     }
   });
@@ -3653,6 +3832,7 @@ startCleanupInterval();
 // Bot update intervals based on server state
 let botUpdateInterval;
 let botMaintenanceInterval;
+let botMaintenanceCounter = 0;
 
 // Start optimized bot intervals
 function startBotIntervals() {
@@ -3671,8 +3851,13 @@ function startBotIntervals() {
   // Bot update interval (movement and AI)
   botUpdateInterval = setInterval(() => {
     if (serverState !== SERVER_STATES.PAUSED) {
+      // Check if there are any human players before updating bots
+      const humanPlayers = Array.from(gameState.players.values()).filter(
+        (p) => !p.isBot && p.alive
+      );
+
       // Only update bots if there are human players in the room
-      if (getAliveHumanPlayers().length > 0) {
+      if (humanPlayers.length > 0) {
         updateBots();
 
         // Broadcast bot movements to all players
@@ -3713,8 +3898,13 @@ function startBotIntervals() {
   // Bot maintenance interval (spawning, cleanup)
   botMaintenanceInterval = setInterval(() => {
     if (serverState !== SERVER_STATES.PAUSED) {
+      // Check if there are any human players before maintaining bots
+      const humanPlayers = Array.from(gameState.players.values()).filter(
+        (p) => !p.isBot && p.alive
+      );
+
       // Only maintain bots if there are human players in the room
-      if (getHumanPlayers().length > 0) {
+      if (humanPlayers.length > 0) {
         maintainOptimizedBots();
         performanceMetrics.botMaintenanceCycles++;
       }
@@ -3724,10 +3914,16 @@ function startBotIntervals() {
 
 // Enhanced bot maintenance with state-aware scaling
 function maintainOptimizedBots() {
-  const allBots = getAliveBots();
+  const humanPlayers = Array.from(gameState.players.values()).filter(
+    (p) => !p.isBot && p.alive
+  ).length;
+  const aliveBots = Array.from(gameState.players.values()).filter(
+    (p) => p.isBot && p.alive
+  );
+  const allBots = Array.from(gameState.players.values()).filter((p) => p.isBot);
 
   // If no human players, remove all bots to completely pause bot activity
-  if (getHumanPlayers().length === 0) {
+  if (humanPlayers === 0) {
     // Clear bot spawn queue and interval when no human players
     if (botSpawnInterval) {
       clearInterval(botSpawnInterval);
@@ -3746,7 +3942,12 @@ function maintainOptimizedBots() {
       });
 
       // Update leaderboard after removing all bots
-      updateLeaderboard();
+      const leaderboard = generateLeaderboard();
+      const fullLeaderboard = generateFullLeaderboard();
+      io.emit("leaderboardUpdate", {
+        leaderboard: leaderboard,
+        fullLeaderboard: fullLeaderboard,
+      });
     }
     return; // Exit early - no need to spawn bots
   }
@@ -3760,7 +3961,7 @@ function maintainOptimizedBots() {
   } else {
     minBots = Math.max(
       PERFORMANCE_CONFIG.MIN_BOTS_ACTIVE,
-      Math.min(5, 5 - getAliveHumanPlayers().length)
+      Math.min(5, 5 - humanPlayers)
     );
     maxBots = PERFORMANCE_CONFIG.MAX_BOTS_ACTIVE;
   }
@@ -3780,11 +3981,16 @@ function maintainOptimizedBots() {
     });
 
     // Update leaderboard after bot removal
-    updateLeaderboard();
+    const leaderboard = generateLeaderboard();
+    const fullLeaderboard = generateFullLeaderboard();
+    io.emit("leaderboardUpdate", {
+      leaderboard: leaderboard,
+      fullLeaderboard: fullLeaderboard,
+    });
   }
 
   // Spawn bots if needed using debounced system
-  const currentAliveBots = getAliveBots().length;
+  const currentAliveBots = aliveBots.length;
   if (currentAliveBots < minBots && allBots.length < maxBots) {
     const botsNeeded = Math.min(
       minBots - currentAliveBots,
@@ -3800,266 +4006,78 @@ function maintainOptimizedBots() {
 startBotIntervals();
 
 // Start memory monitoring system
-// startMemoryMonitoring();
+startMemoryMonitoring();
 
 // Start performance metrics logging
 startPerformanceMetricsLogging();
 
-// Optimized Leaderboard Management System
-class LeaderboardManager {
-  constructor() {
-    this.cachedLeaderboard = null;
-    this.lastUpdate = 0;
-    this.lastBroadcast = 0;
-    this.pendingUpdate = false;
-    this.updateThrottle = 100; // Minimum 100ms between updates
-    this.broadcastThrottle = 200; // Minimum 200ms between broadcasts for human updates
-    this.maxCacheAge = 500; // Cache expires after 500ms
-    this.playersHash = "";
-    this.updateTimeout = null;
+// Generate leaderboard data
+function generateLeaderboard() {
+  // Get all alive players sorted by score
+  const allAlivePlayers = Array.from(gameState.players.values())
+    .filter((player) => player.alive)
+    .sort((a, b) => b.score - a.score);
 
-    // Bot-specific update management
-    this.botUpdateInterval = 5000; // 5 seconds for bot-only updates
-    this.lastBotUpdate = 0;
-    this.botUpdateTimeout = null;
-    this.lastHumanPlayersHash = "";
-  }
+  // Assign correct ranks to ALL players
+  const playersWithRanks = allAlivePlayers.map((player, index) => ({
+    id: player.id,
+    name:
+      player.userName ||
+      (player.isBot
+        ? `Player ${player.id.replace("bot-", "")}`
+        : `Player ${player.id}`),
+    score: player.score,
+    rank: index + 1, // This is the actual rank in the full leaderboard
+    isBot: player.isBot || false,
+    realUserId: player.realUserId || null,
+  }));
 
-  // Generate hash of current BOT players state for cache invalidation (human data is never cached)
-  generatePlayersHash() {
-    const aliveBots = getAliveBots().sort((a, b) =>
-      a.id.localeCompare(b.id)
-    ); // Sort by ID for consistent hash
-
-    return aliveBots.map((p) => `${p.id}:${p.score}:${p.alive}`).join("|");
-  }
-
-  // Generate hash for human players only
-  generateHumanPlayersHash() {
-    const aliveHumanPlayers = getAliveHumanPlayers().sort((a, b) =>
-      a.id.localeCompare(b.id)
-    ); // Sort by ID for consistent hash
-
-    return aliveHumanPlayers
-      .map((p) => `${p.id}:${p.score}:${p.alive}`)
-      .join("|");
-  }
-
-  // Check if human players have changed (for immediate updates)
-  hasHumanPlayersChanged() {
-    const currentHumanHash = this.generateHumanPlayersHash();
-    const changed = this.lastHumanPlayersHash !== currentHumanHash;
-    this.lastHumanPlayersHash = currentHumanHash;
-    return changed;
-  }
-
-  // Check if cache is valid (only for bot data - human data changes always invalidate cache)
-  isCacheValid() {
-    const now = Date.now();
-    const currentBotHash = this.generatePlayersHash();
-    
-    // If human players have changed, cache is invalid regardless of bot state
-    if (this.hasHumanPlayersChanged()) {
-      return false;
-    }
-
-    return (
-      this.cachedLeaderboard &&
-      now - this.lastUpdate < this.maxCacheAge &&
-      this.playersHash === currentBotHash
-    );
-  }
-
-  // Generate leaderboard data with bot-only caching (human data is always fresh)
-  generateLeaderboard() {
-    // Always get fresh data for all players (human + bot)
-    const allAlivePlayers = getAlivePlayers().sort((a, b) => b.score - a.score);
-
-    // Assign correct ranks to ALL players
-    const playersWithRanks = allAlivePlayers.map((player, index) => ({
-      id: player.id,
-      name:
-        player.userName ||
-        (player.isBot ? `${player.id.replace("bot-", "")}` : `${player.id}`),
-      score: player.score,
-      rank: index + 1,
-      isBot: player.isBot || false,
-      realUserId: player.realUserId || null,
-    }));
-
-    const currentPlayerId = playersWithRanks.find((p) => !!p.realUserId)?.id;
-    
-    // If currentPlayerId is provided, ensure they're always included
-    const getTopPlayers = (currentPlayerId) => {
-      if (currentPlayerId) {
-        const currentPlayer = playersWithRanks.find(
-          (p) => p.id === currentPlayerId
-        );
-        
-        if (!currentPlayer) {
-          // Current player not found in alive players, return top 10
-          const top10Players = playersWithRanks.slice(0, 10);
-          return top10Players;
-        }
-  
-        // Check if current player is in top 10
-        const currentPlayerRank = currentPlayer.rank;
-        
-        if (currentPlayerRank <= 10) {
-          // Current player is in top 10, return top 10
-          const top10Players = playersWithRanks.slice(0, 10);
-          return top10Players;
-        } else {
-          // Current player is not in top 10, return top 9 + current player
-          const top9Players = playersWithRanks.slice(0, 9);
-          return [...top9Players, currentPlayer];
-        }
-      }
-  
-      // No specific player requested, return top 10
-      const top10Players = playersWithRanks.slice(0, 10);
-      return top10Players;
-    }
-
-    const leaderboardData = getTopPlayers(currentPlayerId);
-    
-    // Only cache if there are no human players (bot-only scenario)
-    const humanPlayers = getAliveHumanPlayers();
-    if (humanPlayers.length === 0 && this.isCacheValid()) {
-      this.cachedLeaderboard = leaderboardData;
-      this.lastUpdate = Date.now();
-      this.playersHash = this.generatePlayersHash();
-    }
-
-    return leaderboardData;
-  }
-  // Smart leaderboard update with human/bot awareness
-  requestLeaderboardUpdate(immediate = false) {
-    const now = Date.now();
-    const humanPlayersChanged = this.hasHumanPlayersChanged();
-
-    // Immediate update for human player changes or explicit immediate request
-    if (immediate || humanPlayersChanged) {
-      // Clear any pending bot-only update since we're doing an immediate update
-      if (this.botUpdateTimeout) {
-        clearTimeout(this.botUpdateTimeout);
-        this.botUpdateTimeout = null;
-      }
-
-      // Throttle immediate updates to prevent spam
-      if (now - this.lastBroadcast >= this.broadcastThrottle) {
-        this.broadcastLeaderboardUpdate();
-        this.lastBotUpdate = now; // Reset bot update timer
-        return;
-      }
-
-      // Debounce immediate updates
-      if (this.updateTimeout) {
-        clearTimeout(this.updateTimeout);
-      }
-
-      this.updateTimeout = setTimeout(() => {
-        this.broadcastLeaderboardUpdate();
-        this.lastBotUpdate = now; // Reset bot update timer
-      }, this.broadcastThrottle - (now - this.lastBroadcast));
-
-      return;
-    }
-
-    // Bot-only changes - schedule delayed update if not already scheduled
-    if (
-      !this.botUpdateTimeout &&
-      now - this.lastBotUpdate >= this.botUpdateInterval
-    ) {
-      this.botUpdateTimeout = setTimeout(() => {
-        this.broadcastLeaderboardUpdate();
-        this.lastBotUpdate = Date.now();
-        this.botUpdateTimeout = null;
-      }, this.botUpdateInterval - (now - this.lastBotUpdate));
-    }
-  }
-
-  // Broadcast leaderboard update to all clients
-  broadcastLeaderboardUpdate() {
-    const now = Date.now();
-
-    // Throttle broadcasts
-    if (now - this.lastBroadcast < this.broadcastThrottle) {
-      return;
-    }
-
-    try {
-      const leaderboard = this.generateLeaderboard();
-      // Only broadcast if we have valid data
-      if (leaderboard) {
-        // Use centralized emit method for consistency
-        this.emitLeaderboardToSocket(io, leaderboard);
-        this.lastBroadcast = now;
-      }
-    } catch (error) {
-      console.error("❌ Error broadcasting leaderboard update:", error);
-    }
-  }
-
-  // Centralized method to emit leaderboard updates to sockets
-  emitLeaderboardToSocket(socket, leaderboard = null) {
-    try {
-      const leaderboardData = leaderboard || this.generateLeaderboard();
-      if (leaderboardData) {
-        setTimeout(() => {
-          socket.emit("leaderboardUpdate", {
-            leaderboard: leaderboardData,
-            playerCount: gameState.players.size,
-          });
-        }, 300);
-      }
-    } catch (error) {
-      console.error("❌ Error emitting leaderboard to socket:", error);
-    }
-  }
-
-  // Send leaderboard to specific socket
-  sendLeaderboardToSocket(socket) {
-    try {
-      const leaderboard = this.generateLeaderboard();
-      if (leaderboard) {
-        this.emitLeaderboardToSocket(socket, leaderboard);
-      }
-    } catch (error) {
-      console.error("❌ Error sending leaderboard to socket:", error);
-    }
-  }
-
-  // Force cache invalidation
-  invalidateCache() {
-    this.cachedLeaderboard = null;
-    this.playersHash = "";
-    this.lastUpdate = 0;
-  }
-
-  // Get cache statistics for monitoring
-  getCacheStats() {
-    return {
-      isCached: this.isCacheValid(),
-      lastUpdate: this.lastUpdate,
-      lastBroadcast: this.lastBroadcast,
-      cacheAge: Date.now() - this.lastUpdate,
-    };
-  }
+  // Return top 10 players for the leaderboard display
+  // The client will handle showing current player if they're not in top 10
+  return playersWithRanks.slice(0, 10);
 }
 
-// Initialize the leaderboard manager
-const leaderboardManager = new LeaderboardManager();
+// Generate full leaderboard data (for finding current player's rank)
+function generateFullLeaderboard() {
+  const allAlivePlayers = Array.from(gameState.players.values())
+    .filter((player) => player.alive)
+    .sort((a, b) => b.score - a.score);
 
-// Optimized leaderboard update function to replace all duplicate code
-function updateLeaderboard(immediate = false) {
-  leaderboardManager.requestLeaderboardUpdate(immediate);
+  return allAlivePlayers.map((player, index) => ({
+    id: player.id,
+    name:
+      player.userName ||
+      (player.isBot
+        ? `Player ${player.id.replace("bot-", "")}`
+        : `Player ${player.id}`),
+    score: player.score,
+    rank: index + 1,
+    isBot: player.isBot || false,
+    realUserId: player.realUserId || null,
+  }));
 }
 
-// Send leaderboard to specific socket
-function sendLeaderboardToSocket(socket) {
-  leaderboardManager.sendLeaderboardToSocket(socket);
-}
+// Send periodic game state updates
+// setInterval(() => {
+//   const playerCount = gameState.players.size;
+//   const leaderboard = generateLeaderboard();
+
+//   io.emit("gameStats", {
+//     playerCount: playerCount,
+//     foodCount: gameState.foods.length,
+//     leaderboard: leaderboard,
+//   });
+// }, 5000);
+
+// // Send leaderboard updates more frequently
+// setInterval(() => {
+//   const leaderboard = generateLeaderboard();
+//   const fullLeaderboard = generateFullLeaderboard();
+//   io.emit("leaderboardUpdate", {
+//     leaderboard: leaderboard,
+//     fullLeaderboard: fullLeaderboard,
+//   });
+// }, 300);
 
 // Health check endpoint for Docker
 app.get("/health", (req, res) => {
@@ -4093,7 +4111,7 @@ app.get("/health", (req, res) => {
       // ),
       gcEnabled: !!global.gc,
     },
-    // players: playerCount,
+    players: playerCount,
     serverState: serverState,
   });
 });
