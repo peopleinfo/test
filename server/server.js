@@ -107,13 +107,14 @@ const MIN_PLAYERS_FOR_BATTLE = 3;
 const MAX_BOTS = MIN_PLAYERS_FOR_BATTLE;
 const POINT = 3; // Points awarded for eating food or dead points
 const FOOD_RADIUS = 5.5;
-const SNAKE_SEGMENT_SCALE = 0.03; // Size of each snake segment
+const SNAKE_SEGMENT_SCALE = 0.06; // Size of each snake segment
+const SNAKE_SEGMENT_DEFAULT = 10; // Size of each snake segment
 
 // ===== ADAPTIVE RATE LIMITING CONFIGURATION =====
 const RATE_LIMITING_CONFIG = {
   // Base FPS settings
   MIN_FPS: 30, // Minimum 10 FPS (100ms intervals)
-  MAX_FPS: 35, // Maximum 50 FPS (20ms intervals)
+  MAX_FPS: 30, // Maximum 50 FPS (20ms intervals)
   BASE_FPS: 30, // Default 30 FPS (33ms intervals)
 
   // Player count thresholds for adaptive FPS
@@ -259,15 +260,8 @@ function cleanupPlayerRateLimits() {
   }
 }
 
-// Get current effective FPS
-function getCurrentFPS() {
-  return currentRenderFPS;
-}
-
 // Bot management throttling
-let lastBotSpawnAttempt = 0;
 let lastBotLimitLog = 0;
-const BOT_SPAWN_COOLDOWN = 2000; // 2 seconds between spawn attempts
 const BOT_LOG_THROTTLE = 5000; // 5 seconds between limit logs
 
 // Debounced bot spawning system
@@ -319,7 +313,7 @@ const PERFORMANCE_CONFIG = {
   METRICS_LOG_INTERVAL: 30000, // 30 seconds
 };
 
-const { CLEANUP_INTERVAL } = PERFORMANCE_CONFIG;
+const CLEANUP_INTERVAL = PERFORMANCE_CONFIG.CLEANUP_INTERVAL;
 
 // Performance Metrics
 const performanceMetrics = {
@@ -585,6 +579,39 @@ const networkAgent = new NetworkAdaptationAgent();
 // Client viewport tracking
 const clientViewports = new Map(); // playerId -> viewport bounds
 
+// ===== PLAYER DATA ACCESS UTILITY FUNCTIONS =====
+// Centralized functions to eliminate Array.from(gameState.players.values()) duplication
+
+// Get all players as array
+function getAllPlayers() {
+  return Array.from(gameState.players.values());
+}
+
+// Get only human players (non-bot)
+function getHumanPlayers() {
+  return getAllPlayers().filter((player) => !player.isBot);
+}
+
+// Get only bot players
+function getBotPlayers() {
+  return getAllPlayers().filter((player) => player.isBot);
+}
+
+// Get all alive players
+function getAlivePlayers() {
+  return getAllPlayers().filter((player) => player.alive);
+}
+
+// Get alive human players only
+function getAliveHumanPlayers() {
+  return getHumanPlayers().filter((player) => player.alive);
+}
+
+// Get alive bot players only
+function getAliveBots() {
+  return getBotPlayers().filter((player) => player.alive);
+}
+
 console.log("🚀 Network optimization agents initialized");
 console.log(
   `📊 Spatial partitioning: ${spatialAgent.getStats().gridWidth}x${
@@ -593,177 +620,177 @@ console.log(
 );
 
 // Optimized game state broadcast with spatial culling and relevancy scoring
-function broadcastOptimizedGameState(
-  targetPlayerId = null,
-  eventType = "gameUpdate"
-) {
-  const currentTime = Date.now();
+// function broadcastOptimizedGameState(
+//   targetPlayerId = null,
+//   eventType = "gameUpdate"
+// ) {
+//   const currentTime = Date.now();
 
-  // Get all connected players
-  const connectedPlayers = getAlivePlayers();
+//   // Get all connected players
+//   const connectedPlayers = getAlivePlayers();
 
-  connectedPlayers.forEach((player) => {
-    // Skip if targeting specific player and this isn't the target
-    if (targetPlayerId && player.id !== targetPlayerId) return;
+//   connectedPlayers.forEach((player) => {
+//     // Skip if targeting specific player and this isn't the target
+//     if (targetPlayerId && player.id !== targetPlayerId) return;
 
-    // Apply per-player rate limiting
-    if (!shouldSendUpdateToPlayer(player.id)) {
-      return;
-    }
+//     // Apply per-player rate limiting
+//     if (!shouldSendUpdateToPlayer(player.id)) {
+//       return;
+//     }
 
-    const viewport = clientViewports.get(player.id);
-    if (!viewport) {
-      // Fallback to full game state for players without viewport data
-      const fallbackData = {
-        players: connectedPlayers,
-        foods: gameState.foods,
-        deadPoints: gameState.deadPoints,
-      };
+//     const viewport = clientViewports.get(player.id);
+//     if (!viewport) {
+//       // Fallback to full game state for players without viewport data
+//       const fallbackData = {
+//         players: connectedPlayers,
+//         foods: gameState.foods,
+//         deadPoints: gameState.deadPoints,
+//       };
 
-      // Send fallback data as JSON (with rate limiting already applied)
-      // io.to(player.socketId).emit("gameUpdate", fallbackData);
-      return;
-    }
+//       // Send fallback data as JSON (with rate limiting already applied)
+//       // io.to(player.socketId).emit("gameUpdate", fallbackData);
+//       return;
+//     }
 
-    // Use spatial partitioning to get relevant objects
-    const relevantPlayers = spatialAgent.getObjectsInViewport(
-      viewport.x,
-      viewport.y,
-      viewport.width,
-      viewport.height,
-      ["players"]
-    );
+//     // Use spatial partitioning to get relevant objects
+//     const relevantPlayers = spatialAgent.getObjectsInViewport(
+//       viewport.x,
+//       viewport.y,
+//       viewport.width,
+//       viewport.height,
+//       ["players"]
+//     );
 
-    const relevantFoods = spatialAgent.getObjectsInViewport(
-      viewport.x,
-      viewport.y,
-      viewport.width,
-      viewport.height,
-      ["foods"]
-    );
+//     const relevantFoods = spatialAgent.getObjectsInViewport(
+//       viewport.x,
+//       viewport.y,
+//       viewport.width,
+//       viewport.height,
+//       ["foods"]
+//     );
 
-    const relevantDeadPoints = spatialAgent.getObjectsInViewport(
-      viewport.x,
-      viewport.y,
-      viewport.width,
-      viewport.height,
-      ["deadPoints"]
-    );
+//     const relevantDeadPoints = spatialAgent.getObjectsInViewport(
+//       viewport.x,
+//       viewport.y,
+//       viewport.width,
+//       viewport.height,
+//       ["deadPoints"]
+//     );
 
-    // Apply relevancy scoring with lower thresholds for better optimization
-    const scoredPlayers = relevancyAgent
-      .scoreObjects(
-        relevantPlayers,
-        viewport.playerX,
-        viewport.playerY,
-        "players"
-      )
-      .filter((obj) => obj.score > 0.01); // Lower threshold for players
+//     // Apply relevancy scoring with lower thresholds for better optimization
+//     const scoredPlayers = relevancyAgent
+//       .scoreObjects(
+//         relevantPlayers,
+//         viewport.playerX,
+//         viewport.playerY,
+//         "players"
+//       )
+//       .filter((obj) => obj.score > 0.01); // Lower threshold for players
 
-    const scoredFoods = relevancyAgent
-      .scoreObjects(relevantFoods, viewport.playerX, viewport.playerY, "foods")
-      .filter((obj) => obj.score > 0.005); // Lower threshold for foods
+//     const scoredFoods = relevancyAgent
+//       .scoreObjects(relevantFoods, viewport.playerX, viewport.playerY, "foods")
+//       .filter((obj) => obj.score > 0.005); // Lower threshold for foods
 
-    const scoredDeadPoints = relevancyAgent
-      .scoreObjects(
-        relevantDeadPoints,
-        viewport.playerX,
-        viewport.playerY,
-        "deadPoints"
-      )
-      .filter((obj) => obj.score > 0.005); // Lower threshold for dead points
+//     const scoredDeadPoints = relevancyAgent
+//       .scoreObjects(
+//         relevantDeadPoints,
+//         viewport.playerX,
+//         viewport.playerY,
+//         "deadPoints"
+//       )
+//       .filter((obj) => obj.score > 0.005); // Lower threshold for dead points
 
-    // Get adaptive update frequency from network agent
-    const playerData = {
-      x: viewport.playerX,
-      y: viewport.playerY,
-      velocityX: player.velocityX || 0,
-      velocityY: player.velocityY || 0,
-      lastActionTime: player.lastActionTime || currentTime,
-      alive: player.alive,
-    };
+//     // Get adaptive update frequency from network agent
+//     const playerData = {
+//       x: viewport.playerX,
+//       y: viewport.playerY,
+//       velocityX: player.velocityX || 0,
+//       velocityY: player.velocityY || 0,
+//       lastActionTime: player.lastActionTime || currentTime,
+//       alive: player.alive,
+//     };
 
-    const serverMetrics = {
-      playerCount: connectedPlayers.length,
-      objectCount: gameState.foods.length + gameState.deadPoints.length,
-    };
+//     const serverMetrics = {
+//       playerCount: connectedPlayers.length,
+//       objectCount: gameState.foods.length + gameState.deadPoints.length,
+//     };
 
-    const allGameObjects = [
-      ...relevantPlayers,
-      ...relevantFoods,
-      ...relevantDeadPoints,
-    ];
-    const updateFreq = networkAgent.getUpdateFrequency(
-      player.id,
-      playerData,
-      allGameObjects,
-      serverMetrics
-    );
-    const shouldUpdate = currentTime - (player.lastUpdate || 0) >= updateFreq;
+//     const allGameObjects = [
+//       ...relevantPlayers,
+//       ...relevantFoods,
+//       ...relevantDeadPoints,
+//     ];
+//     const updateFreq = networkAgent.getUpdateFrequency(
+//       player.id,
+//       playerData,
+//       allGameObjects,
+//       serverMetrics
+//     );
+//     const shouldUpdate = currentTime - (player.lastUpdate || 0) >= updateFreq;
 
-    if (shouldUpdate) {
-      // Create optimized game state with delta compression
-      const gameStateData = {
-        players: scoredPlayers.map((obj) => obj.object),
-        foods: scoredFoods.map((obj) => obj.object),
-        deadPoints: scoredDeadPoints.map((obj) => obj.object),
-        viewport: {
-          x: viewport.x,
-          y: viewport.y,
-          width: viewport.width,
-          height: viewport.height,
-        },
-      };
+//     if (shouldUpdate) {
+//       // Create optimized game state with delta compression
+//       const gameStateData = {
+//         players: scoredPlayers.map((obj) => obj.object),
+//         foods: scoredFoods.map((obj) => obj.object),
+//         deadPoints: scoredDeadPoints.map((obj) => obj.object),
+//         viewport: {
+//           x: viewport.x,
+//           y: viewport.y,
+//           width: viewport.width,
+//           height: viewport.height,
+//         },
+//       };
 
-      // Send game state data as JSON (msgpack parser will handle compression)
-      // io.to(player.socketId).emit("gameUpdate", gameStateData);
+//       // Send game state data as JSON (msgpack parser will handle compression)
+//       // io.to(player.socketId).emit("gameUpdate", gameStateData);
 
-      // Track bandwidth usage per player
-      if (!player.bandwidthStats) {
-        player.bandwidthStats = {
-          totalBytes: 0,
-          updateCount: 0,
-          startTime: currentTime,
-          deltaUpdates: 0,
-          fullUpdates: 0,
-        };
-      }
-      // Estimate data size for tracking (msgpack will compress)
-      const estimatedSize = JSON.stringify(gameStateData).length;
-      player.bandwidthStats.totalBytes += estimatedSize;
-      player.bandwidthStats.updateCount++;
-      player.bandwidthStats.fullUpdates++;
+//       // Track bandwidth usage per player
+//       if (!player.bandwidthStats) {
+//         player.bandwidthStats = {
+//           totalBytes: 0,
+//           updateCount: 0,
+//           startTime: currentTime,
+//           deltaUpdates: 0,
+//           fullUpdates: 0,
+//         };
+//       }
+//       // Estimate data size for tracking (msgpack will compress)
+//       const estimatedSize = JSON.stringify(gameStateData).length;
+//       player.bandwidthStats.totalBytes += estimatedSize;
+//       player.bandwidthStats.updateCount++;
+//       player.bandwidthStats.fullUpdates++;
 
-      player.lastUpdate = currentTime;
+//       player.lastUpdate = currentTime;
 
-      // Log enhanced optimization stats (reduced frequency)
-      if (Math.random() < 0.05) {
-        // Only log 5% of updates to reduce spam
-        const originalCount =
-          connectedPlayers.length +
-          gameState.foods.length +
-          gameState.deadPoints.length;
-        const optimizedCount =
-          scoredPlayers.length + scoredFoods.length + scoredDeadPoints.length;
-        const spatialReduction = (
-          ((originalCount - optimizedCount) / originalCount) *
-          100
-        ).toFixed(1);
+//       // Log enhanced optimization stats (reduced frequency)
+//       if (Math.random() < 0.05) {
+//         // Only log 5% of updates to reduce spam
+//         const originalCount =
+//           connectedPlayers.length +
+//           gameState.foods.length +
+//           gameState.deadPoints.length;
+//         const optimizedCount =
+//           scoredPlayers.length + scoredFoods.length + scoredDeadPoints.length;
+//         const spatialReduction = (
+//           ((originalCount - optimizedCount) / originalCount) *
+//           100
+//         ).toFixed(1);
 
-        const timeElapsed =
-          (currentTime - player.bandwidthStats.startTime) / 1000;
-        const bytesPerSecond =
-          timeElapsed > 0 ? player.bandwidthStats.totalBytes / timeElapsed : 0;
+//         const timeElapsed =
+//           (currentTime - player.bandwidthStats.startTime) / 1000;
+//         const bytesPerSecond =
+//           timeElapsed > 0 ? player.bandwidthStats.totalBytes / timeElapsed : 0;
 
-        console.log(`🚀 Optimized Update [${player.id}]:`, {
-          spatial: `${spatialReduction}% reduction (${originalCount}→${optimizedCount})`,
-          bandwidth: `${(bytesPerSecond / 1024).toFixed(1)} KB/s`,
-          fps: currentRenderFPS,
-        });
-      }
-    }
-  });
-}
+//         console.log(`🚀 Optimized Update [${player.id}]:`, {
+//           spatial: `${spatialReduction}% reduction (${originalCount}→${optimizedCount})`,
+//           bandwidth: `${(bytesPerSecond / 1024).toFixed(1)} KB/s`,
+//           fps: currentRenderFPS,
+//         });
+//       }
+//     }
+//   });
+// }
 
 // Update spatial partitioning with current game objects
 function updateSpatialPartitioning() {
@@ -797,10 +824,6 @@ function updateSpatialPartitioning() {
 // Initialize food
 function initializeFoods() {
   gameState.foods = [];
-  // console.log(
-  //   `🍎 Initializing ${gameState.maxFoods} food items in ${gameState.worldWidth}x${gameState.worldHeight} world...`
-  // );
-
   // Wall thickness from client GameEngine.ts drawBoundary method (default lineWidth = 16)
   const wallThickness = 8; // Half of lineWidth (16/2) since walls are centered on boundary
 
@@ -860,8 +883,6 @@ function checkForStuckPlayers() {
 
       // Reset stuck timer if player was stuck
       if (player.stuckTracking.stuckStartTime) {
-        const stuckDuration = currentTime - player.stuckTracking.stuckStartTime;
-
         // Broadcast that player is no longer stuck
         io.emit("playerStuckWarning", {
           playerId: player.id,
@@ -953,13 +974,8 @@ function checkForStuckPlayers() {
               // Broadcast player disconnected (this will remove the snake from client view)
               io.emit("playerDisconnected", player.id);
 
-              // Also broadcast player left for consistency
-              // io.emit("playerLeft", {
-              //   playerId: player.id,
-              // });
-
               // Update leaderboard after player removal
-              updateLeaderboard(true);
+              updateLeaderboard();
             }
             return; // Skip further processing for this player
           } else {
@@ -1074,7 +1090,7 @@ function getPointValueByType(type) {
     case "orange":
       return 12;
     case "grapes":
-      return 100;
+      return 15;
     default:
       return POINT;
   }
@@ -1441,19 +1457,11 @@ function getSpawnZones() {
       zones.push({ x: finalX, y: finalY, size: zoneSize });
     }
   }
-
-  // Validate zone distribution
-  // const minX = Math.min(...zones.map((z) => z.x));
-  // const maxX = Math.max(...zones.map((z) => z.x));
-  // const minY = Math.min(...zones.map((z) => z.y));
-  // const maxY = Math.max(...zones.map((z) => z.y));
   return zones;
 }
 
 // Check if position is safe (no collision with existing worms) - enhanced safety checks
 function isPositionSafe(x, y, radius, minDistance = 200) {
-  const alivePlayers = getAlivePlayers();
-
   // Check boundaries with increased buffer for better safety
   const boundaryBuffer = 80;
   if (
@@ -1954,6 +1962,8 @@ function spawnSingleBot(botId) {
 
   // Broadcast new bot to all players
   io.emit("playerJoined", bot);
+  // Update leaderboard after bot spawn
+  updateLeaderboard();
 }
 
 // Legacy function for backward compatibility - now uses debounced system
@@ -2019,13 +2029,8 @@ function handleBotDeath(bot, killerId = null) {
   // Broadcast bot removal (this will remove the snake from client view)
   io.emit("playerDisconnected", bot.id);
 
-  // Also broadcast player left for consistency
-  // io.emit("playerLeft", {
-  //   playerId: bot.id,
-  // });
-
   // Update leaderboard after bot removal
-  updateLeaderboard(true);
+  updateLeaderboard();
 }
 
 // ===== SERVER STATE MANAGEMENT FUNCTIONS =====
@@ -2141,7 +2146,10 @@ function performFoodCleanup(targetReduction = 50) {
   const regularFoods = gameState.foods.filter((f) => !f.isScoreGenerated);
 
   // Get current player positions for distance calculations
-  const playerPositions = getAlivePlayers().map((p) => ({ x: p.x, y: p.y }));
+  const playerPositions = getAliveHumanPlayers().map((p) => ({
+    x: p.x,
+    y: p.y,
+  }));
 
   // Add timestamps to food items if missing and calculate cleanup priority
   const currentTime = Date.now();
@@ -2389,12 +2397,13 @@ function performSmartDeadPointCleanup(forceCleanup = false) {
   pointsToRemove = Math.min(pointsToRemove, maxRemovalPerCleanup);
 
   // Separate human and bot players for enhanced priority calculation
-  const humanPlayerPositions = getAliveHumanPlayers().map((p) => ({
-    x: p.x,
-    y: p.y,
-  }));
-
-  const botPlayerPositions = getAliveBots().map((p) => ({ x: p.x, y: p.y }));
+  const alivePlayers = getAlivePlayers();
+  const humanPlayerPositions = alivePlayers
+    .filter((p) => !p.isBot)
+    .map((p) => ({ x: p.x, y: p.y }));
+  const botPlayerPositions = alivePlayers
+    .filter((p) => p.isBot)
+    .map((p) => ({ x: p.x, y: p.y }));
 
   // Get spawn zones
   const spawnZones = getSpawnZones();
@@ -2459,21 +2468,11 @@ function performSmartDeadPointCleanup(forceCleanup = false) {
   // Update metrics
   performanceMetrics.deadPointsCleanedUp += actualPointsToRemove;
 
-  // Broadcast cleanup to clients if significant (with reduced threshold)
-  if (actualPointsToRemove > 500) {
-    io.emit("deadPointsCleanup", {
-      removedCount: actualPointsToRemove,
-      remainingCount: gameState.deadPoints.length,
-    });
-  }
+  // Dead points cleanup completed (removed unused broadcast)
 }
 
 function updateBots() {
   // Check if there are any human players in the room
-  const humanPlayers = getAliveHumanPlayers();
-
-  const allBots = getBotPlayers();
-  const aliveBots = getAliveBots();
 
   // Debug bot status every 10 seconds
   if (
@@ -2484,7 +2483,7 @@ function updateBots() {
   }
 
   // If no human players, don't update bots at all
-  if (humanPlayers.length === 0) {
+  if (getAliveHumanPlayers().length === 0) {
     return;
   }
 
@@ -2896,7 +2895,7 @@ function updateBots() {
 
         // Add multiple segments based on food point value (1 segment = 10 points)
         const pointSegment =
-          pointValue >= 1100 ? Math.floor(pointValue * SNAKE_SEGMENT_SCALE) : 5;
+          pointValue >= 1100 ? Math.floor(pointValue * SNAKE_SEGMENT_SCALE) : SNAKE_SEGMENT_DEFAULT;
 
         const segmentsToAdd = Math.max(
           1,
@@ -2946,7 +2945,7 @@ function updateBots() {
         // });
 
         // Broadcast updated leaderboard
-        updateLeaderboard(true);
+        updateLeaderboard();
 
         break; // Only eat one food per update cycle
       }
@@ -2970,7 +2969,7 @@ function updateBots() {
           player.score += pointValue;
 
           const pointSegment =
-            pointValue >= 1100 ? Math.floor(pointValue * SNAKE_SEGMENT_SCALE) : 5;
+            pointValue >= 1100 ? Math.floor(pointValue * SNAKE_SEGMENT_SCALE) : SNAKE_SEGMENT_DEFAULT;
 
           // Add multiple segments based on dead point value (1 segment = 10 points)
           const segmentsToAdd = Math.max(
@@ -3013,7 +3012,7 @@ function updateBots() {
           // });
 
           // Broadcast updated leaderboard
-          updateLeaderboard(true);
+          updateLeaderboard();
 
           break; // Only eat one dead point per update cycle
         } else {
@@ -3149,7 +3148,7 @@ io.on("connection", (socket) => {
     socket.broadcast.emit("playerJoined", newPlayer);
 
     // Broadcast updated leaderboard to all players
-    updateLeaderboard(true);
+    updateLeaderboard();
   });
 
   // Handle player movement
@@ -3179,9 +3178,6 @@ io.on("connection", (socket) => {
         currentTime - player.spawnTime >= spawnProtectionDuration
       ) {
         player.spawnProtection = false;
-        console.log(
-          `🛡️ DEBUG: Spawn protection removed for player ${data.playerId} during movement`
-        );
       }
 
       // Broadcast movement to all other players with current spawn protection status
@@ -3288,7 +3284,7 @@ io.on("connection", (socket) => {
       // });
 
       // Broadcast updated leaderboard
-      updateLeaderboard(true);
+      updateLeaderboard();
     }
   });
 
@@ -3366,14 +3362,13 @@ io.on("connection", (socket) => {
         // });
 
         // Broadcast updated leaderboard
-        updateLeaderboard(true);
+        updateLeaderboard();
       }
     }
   });
 
   // Handle player death - optimized for performance
   socket.on("playerDied", (data) => {
-    const startTime = performance.now();
     const player = gameState.players.get(data.playerId);
     if (!player) return;
 
@@ -3432,7 +3427,7 @@ io.on("connection", (socket) => {
       io.emit("playerDisconnected", data.playerId);
 
       // Update leaderboard after bot removal
-      updateLeaderboard(true);
+      updateLeaderboard();
     } else {
       // Respawn human player after 3 seconds
       setTimeout(() => {
@@ -3508,10 +3503,10 @@ io.on("connection", (socket) => {
       }
 
       // Broadcast updated game state to all players
-      io.emit("gameStats", {
-        playerCount: gameState.players.size,
-        foodCount: gameState.foods.length,
-      });
+      // io.emit("gameStats", {
+      //   playerCount: gameState.players.size,
+      //   foodCount: gameState.foods.length,
+      // });
     }
   });
 
@@ -3524,12 +3519,9 @@ io.on("connection", (socket) => {
       spatialAgent.removeObject(player.id);
       gameState.players.delete(data.playerId);
       io.emit("playerDisconnected", data.playerId);
-      socket.broadcast.emit("playerLeft", {
-        playerId: data.playerId,
-      });
 
       // Broadcast updated leaderboard after player leaves
-      updateLeaderboard(true);
+      updateLeaderboard();
 
       console.log("Player", data.playerId, "successfully left the room");
     }
@@ -3613,13 +3605,8 @@ io.on("connection", (socket) => {
             // Broadcast player disconnected (this will remove the snake from client view)
             io.emit("playerDisconnected", disconnectedPlayerId);
 
-            // Also broadcast player left for consistency
-            io.emit("playerLeft", {
-              playerId: disconnectedPlayerId,
-            });
-
             // Broadcast updated leaderboard after player leaves
-            updateLeaderboard(true);
+            updateLeaderboard();
           }
         }, 4000); // 4 second delay
       } else if (player && !player.alive) {
@@ -3629,12 +3616,9 @@ io.on("connection", (socket) => {
         performanceMetrics.playerDisconnections++;
         updatePeakMetrics();
         io.emit("playerDisconnected", disconnectedPlayerId);
-        socket.broadcast.emit("playerLeft", {
-          playerId: disconnectedPlayerId,
-        });
 
         // Broadcast updated leaderboard after player leaves
-        updateLeaderboard(true);
+        updateLeaderboard();
       }
     }
   });
@@ -3687,11 +3671,8 @@ function startBotIntervals() {
   // Bot update interval (movement and AI)
   botUpdateInterval = setInterval(() => {
     if (serverState !== SERVER_STATES.PAUSED) {
-      // Check if there are any human players before updating bots
-      const humanPlayers = getAliveHumanPlayers();
-
       // Only update bots if there are human players in the room
-      if (humanPlayers.length > 0) {
+      if (getAliveHumanPlayers().length > 0) {
         updateBots();
 
         // Broadcast bot movements to all players
@@ -3732,11 +3713,8 @@ function startBotIntervals() {
   // Bot maintenance interval (spawning, cleanup)
   botMaintenanceInterval = setInterval(() => {
     if (serverState !== SERVER_STATES.PAUSED) {
-      // Check if there are any human players before maintaining bots
-      const humanPlayers = getAliveHumanPlayers();
-
       // Only maintain bots if there are human players in the room
-      if (humanPlayers.length > 0) {
+      if (getHumanPlayers().length > 0) {
         maintainOptimizedBots();
         performanceMetrics.botMaintenanceCycles++;
       }
@@ -3746,12 +3724,10 @@ function startBotIntervals() {
 
 // Enhanced bot maintenance with state-aware scaling
 function maintainOptimizedBots() {
-  const humanPlayers = getAliveHumanPlayers().length;
-  const aliveBots = getAliveBots();
-  const allBots = getBotPlayers();
+  const allBots = getAliveBots();
 
   // If no human players, remove all bots to completely pause bot activity
-  if (humanPlayers === 0) {
+  if (getHumanPlayers().length === 0) {
     // Clear bot spawn queue and interval when no human players
     if (botSpawnInterval) {
       clearInterval(botSpawnInterval);
@@ -3770,7 +3746,7 @@ function maintainOptimizedBots() {
       });
 
       // Update leaderboard after removing all bots
-      updateLeaderboard(true);
+      updateLeaderboard();
     }
     return; // Exit early - no need to spawn bots
   }
@@ -3784,7 +3760,7 @@ function maintainOptimizedBots() {
   } else {
     minBots = Math.max(
       PERFORMANCE_CONFIG.MIN_BOTS_ACTIVE,
-      Math.min(5, 5 - humanPlayers)
+      Math.min(5, 5 - getAliveHumanPlayers().length)
     );
     maxBots = PERFORMANCE_CONFIG.MAX_BOTS_ACTIVE;
   }
@@ -3804,11 +3780,11 @@ function maintainOptimizedBots() {
     });
 
     // Update leaderboard after bot removal
-    updateLeaderboard(true);
+    updateLeaderboard();
   }
 
   // Spawn bots if needed using debounced system
-  const currentAliveBots = aliveBots.length;
+  const currentAliveBots = getAliveBots().length;
   if (currentAliveBots < minBots && allBots.length < maxBots) {
     const botsNeeded = Math.min(
       minBots - currentAliveBots,
@@ -3824,7 +3800,7 @@ function maintainOptimizedBots() {
 startBotIntervals();
 
 // Start memory monitoring system
-startMemoryMonitoring();
+// startMemoryMonitoring();
 
 // Start performance metrics logging
 startPerformanceMetricsLogging();
@@ -3849,13 +3825,13 @@ class LeaderboardManager {
     this.lastHumanPlayersHash = "";
   }
 
-  // Generate hash of current players state for cache invalidation
+  // Generate hash of current BOT players state for cache invalidation (human data is never cached)
   generatePlayersHash() {
-    const alivePlayers = getAliveHumanPlayers().sort((a, b) =>
+    const aliveBots = getAliveBots().sort((a, b) =>
       a.id.localeCompare(b.id)
     ); // Sort by ID for consistent hash
 
-    return alivePlayers.map((p) => `${p.id}:${p.score}:${p.alive}`).join("|");
+    return aliveBots.map((p) => `${p.id}:${p.score}:${p.alive}`).join("|");
   }
 
   // Generate hash for human players only
@@ -3877,25 +3853,26 @@ class LeaderboardManager {
     return changed;
   }
 
-  // Check if cache is valid
+  // Check if cache is valid (only for bot data - human data changes always invalidate cache)
   isCacheValid() {
     const now = Date.now();
-    const currentHash = this.generatePlayersHash();
+    const currentBotHash = this.generatePlayersHash();
+    
+    // If human players have changed, cache is invalid regardless of bot state
+    if (this.hasHumanPlayersChanged()) {
+      return false;
+    }
 
     return (
       this.cachedLeaderboard &&
       now - this.lastUpdate < this.maxCacheAge &&
-      this.playersHash === currentHash
+      this.playersHash === currentBotHash
     );
   }
 
-  // Generate leaderboard data with caching
+  // Generate leaderboard data with bot-only caching (human data is always fresh)
   generateLeaderboard() {
-    if (this.isCacheValid()) {
-      return this.cachedLeaderboard;
-    }
-
-    // Get all alive players sorted by score
+    // Always get fresh data for all players (human + bot)
     const allAlivePlayers = getAlivePlayers().sort((a, b) => b.score - a.score);
 
     // Assign correct ranks to ALL players
@@ -3911,24 +3888,23 @@ class LeaderboardManager {
     }));
 
     const currentPlayerId = playersWithRanks.find((p) => !!p.realUserId)?.id;
-
-    // Cache the resultslice(0, 10);
+    
     // If currentPlayerId is provided, ensure they're always included
     const getTopPlayers = (currentPlayerId) => {
       if (currentPlayerId) {
         const currentPlayer = playersWithRanks.find(
           (p) => p.id === currentPlayerId
         );
-
+        
         if (!currentPlayer) {
           // Current player not found in alive players, return top 10
           const top10Players = playersWithRanks.slice(0, 10);
           return top10Players;
         }
-
+  
         // Check if current player is in top 10
         const currentPlayerRank = currentPlayer.rank;
-
+        
         if (currentPlayerRank <= 10) {
           // Current player is in top 10, return top 10
           const top10Players = playersWithRanks.slice(0, 10);
@@ -3939,19 +3915,24 @@ class LeaderboardManager {
           return [...top9Players, currentPlayer];
         }
       }
-
-      // No specific player requested, return top 10 for caching
+  
+      // No specific player requested, return top 10
       const top10Players = playersWithRanks.slice(0, 10);
       return top10Players;
-    };
+    }
 
-    this.cachedLeaderboard = getTopPlayers(currentPlayerId);
-    this.lastUpdate = Date.now();
-    this.playersHash = this.generatePlayersHash();
+    const leaderboardData = getTopPlayers(currentPlayerId);
+    
+    // Only cache if there are no human players (bot-only scenario)
+    const humanPlayers = getAliveHumanPlayers();
+    if (humanPlayers.length === 0 && this.isCacheValid()) {
+      this.cachedLeaderboard = leaderboardData;
+      this.lastUpdate = Date.now();
+      this.playersHash = this.generatePlayersHash();
+    }
 
-    return this.cachedLeaderboard;
+    return leaderboardData;
   }
-
   // Smart leaderboard update with human/bot awareness
   requestLeaderboardUpdate(immediate = false) {
     const now = Date.now();
@@ -3970,28 +3951,31 @@ class LeaderboardManager {
         this.broadcastLeaderboardUpdate();
         this.lastBotUpdate = now; // Reset bot update timer
         return;
-      } else {
-        // Schedule immediate update after throttle period
-        if (this.updateTimeout) {
-          clearTimeout(this.updateTimeout);
-        }
-        this.updateTimeout = setTimeout(() => {
-          this.broadcastLeaderboardUpdate();
-          this.lastBotUpdate = now;
-        }, this.broadcastThrottle - (now - this.lastBroadcast));
-        return;
       }
+
+      // Debounce immediate updates
+      if (this.updateTimeout) {
+        clearTimeout(this.updateTimeout);
+      }
+
+      this.updateTimeout = setTimeout(() => {
+        this.broadcastLeaderboardUpdate();
+        this.lastBotUpdate = now; // Reset bot update timer
+      }, this.broadcastThrottle - (now - this.lastBroadcast));
+
+      return;
     }
 
-    // Bot-only updates (less frequent)
-    if (now - this.lastBotUpdate >= this.botUpdateInterval) {
-      if (!this.botUpdateTimeout) {
-        this.botUpdateTimeout = setTimeout(() => {
-          this.broadcastLeaderboardUpdate();
-          this.lastBotUpdate = Date.now();
-          this.botUpdateTimeout = null;
-        }, 100); // Small delay to batch bot updates
-      }
+    // Bot-only changes - schedule delayed update if not already scheduled
+    if (
+      !this.botUpdateTimeout &&
+      now - this.lastBotUpdate >= this.botUpdateInterval
+    ) {
+      this.botUpdateTimeout = setTimeout(() => {
+        this.broadcastLeaderboardUpdate();
+        this.lastBotUpdate = Date.now();
+        this.botUpdateTimeout = null;
+      }, this.botUpdateInterval - (now - this.lastBotUpdate));
     }
   }
 
@@ -4046,27 +4030,21 @@ class LeaderboardManager {
     }
   }
 
-  // Generate full leaderboard data (for finding current player's rank)
-  // generateFullLeaderboard() {
-  //   const allAlivePlayers = getAlivePlayers().sort((a, b) => b.score - a.score);
-
-  //   return allAlivePlayers.map((player, index) => ({
-  //     id: player.id,
-  //     name:
-  //       player.userName ||
-  //       (player.isBot ? `${player.id.replace("bot-", "")}` : `${player.id}`),
-  //     score: player.score,
-  //     rank: index + 1,
-  //     isBot: player.isBot || false,
-  //     realUserId: player.realUserId || null,
-  //   }));
-  // }
-
   // Force cache invalidation
   invalidateCache() {
     this.cachedLeaderboard = null;
     this.playersHash = "";
     this.lastUpdate = 0;
+  }
+
+  // Get cache statistics for monitoring
+  getCacheStats() {
+    return {
+      isCached: this.isCacheValid(),
+      lastUpdate: this.lastUpdate,
+      lastBroadcast: this.lastBroadcast,
+      cacheAge: Date.now() - this.lastUpdate,
+    };
   }
 }
 
