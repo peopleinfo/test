@@ -4,6 +4,8 @@
  * Enables proactive data loading and smooth gameplay experience
  */
 
+const { round } = require("../utils/positionUtils");
+
 class PredictiveCullingAgent {
   constructor() {
     // Player movement history for prediction
@@ -125,8 +127,8 @@ class PredictiveCullingAgent {
     }
     
     const prediction = {
-      x: finalPredictedX,
-      y: finalPredictedY,
+      x: round(finalPredictedX),
+      y: round(finalPredictedY),
       confidence,
       velocity: { x: smoothedVelocityX, y: smoothedVelocityY },
       acceleration: { x: accelerationX, y: accelerationY },

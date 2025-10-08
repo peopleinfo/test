@@ -1,6 +1,5 @@
 const express = require("express");
 const http = require("http");
-const socketIo = require("socket.io");
 
 // Import optimization agents
 const {
@@ -9,104 +8,16 @@ const {
 const RelevancyScoreAgent = require("./agents/RelevancyScoreAgent");
 const { PredictiveCullingAgent } = require("./agents/PredictiveCullingAgent");
 const { NetworkAdaptationAgent } = require("./agents/NetworkAdaptationAgent");
-const msgpackrParser = require("./utils/sgpackr-parser-server-native");
 
-// Import binary protocol for optimized data transmission
-// const BinaryProtocol = require("./utils/binaryProtocol");
+const initSocket = require("./socket");
+
+const { round } = require("./utils/positionUtils");
 
 const app = express();
 const server = http.createServer(app);
-const io = socketIo(server, {
-  parser: msgpackrParser,
-  cors: {
-    origin: "*",
-    methods: ["GET", "POST"],
-  },
-  transports: ["websocket"],
-  // ✅ KEEP: Prevent upgrade attempts
-  upgrade: false,
 
-  // ❌ REMOVE: Not needed with WebSocket-only
-  // rememberUpgrade: false,
-
-  // ⚠️ OPTIONAL: Only if supporting old Engine.IO v3 clients
-  allowEIO3: true,
-
-  // ❌ REMOVE: Compression conflicts with msgpackr!
-  // msgpackr already compresses data efficiently
-  // Double compression can actually make it SLOWER
-  // compression: true,
-  // httpCompression: { ... },
-  // perMessageDeflate: { ... },
-
-  // ✅ KEEP: Connection optimization
-  pingTimeout: 60000,
-  pingInterval: 25000,
-  upgradeTimeout: 10000,
-
-  // ✅ ADJUST: Increase for msgpackr efficiency
-  // msgpackr handles large payloads better
-  maxHttpBufferSize: 10e6, // 10MB instead of 1MB
-});
-
-// Token validation utility
-function validateToken(token) {
-  if (!token) {
-    return { valid: false, reason: "No token provided" };
-  }
-
-  // Basic token format validation
-  if (typeof token !== "string" || token.length < 10) {
-    return { valid: false, reason: "Invalid token format" };
-  }
-
-  // For now, we'll accept any properly formatted token
-  // In production, you would validate against your auth service
-  return { valid: true, token };
-}
-
-// Socket authentication middleware
-io.use((socket, next) => {
-  const token = socket.handshake.auth.token;
-  const userData = socket.handshake.auth.userData;
-
-  if (token) {
-    const validation = validateToken(token);
-    if (validation.valid) {
-      // Store authenticated user info in socket data
-      socket.data.isAuthenticated = true;
-      socket.data.token = token;
-      socket.data.userData = userData;
-      socket.data.openId = userData?.openId;
-      socket.data.userInfo = userData?.userInfo;
-
-      // Emit authentication success after connection
-      socket.on("connect", () => {
-        socket.emit("auth_success", {
-          authenticated: true,
-          openId: userData?.openId,
-          userInfo: userData?.userInfo,
-        });
-      });
-    } else {
-      // Allow connection but mark as unauthenticated
-      socket.data.isAuthenticated = false;
-
-      // Emit authentication error after connection
-      socket.on("connect", () => {
-        socket.emit("auth_error", {
-          error: "Token validation failed",
-          reason: validation.reason,
-        });
-      });
-    }
-  } else {
-    // Allow Player connections
-    socket.data.isAuthenticated = false;
-  }
-
-  next(); // Always allow connection, but track auth status
-});
+// / Initialize socket.io with msgpackr parser
+const io = initSocket(server);
 
 const MIN_PLAYERS_FOR_BATTLE = 3;
 const MAX_BOTS = MIN_PLAYERS_FOR_BATTLE;
@@ -119,10 +30,9 @@ const SNAKE_SEGMENT_DEFAULT = 10; // Size of each snake segment
 // ===== ADAPTIVE RATE LIMITING CONFIGURATION =====
 const RATE_LIMITING_CONFIG = {
   // Base FPS settings
-  MIN_FPS: 30, // Minimum 10 FPS (100ms intervals)
-  MAX_FPS: 50, // Maximum 50 FPS (20ms intervals)
-  BASE_FPS: 30, // Default 30 FPS (33ms intervals)
-
+  MIN_FPS: 25, // Minimum 10 FPS (100ms intervals)
+  MAX_FPS: 25, // Maximum 50 FPS (20ms intervals)
+  BASE_FPS: 25, // Default 30 FPS (33ms intervals)
   // Player count thresholds for adaptive FPS
   PLAYER_THRESHOLDS: {
     LOW: 8, // 1-2 players: higher FPS
@@ -268,15 +178,8 @@ function cleanupPlayerRateLimits() {
   }
 }
 
-// Get current effective FPS
-function getCurrentFPS() {
-  return currentRenderFPS;
-}
-
 // Bot management throttling
-let lastBotSpawnAttempt = 0;
 let lastBotLimitLog = 0;
-const BOT_SPAWN_COOLDOWN = 2000; // 2 seconds between spawn attempts
 const BOT_LOG_THROTTLE = 5000; // 5 seconds between limit logs
 
 // Debounced bot spawning system
@@ -548,13 +451,27 @@ const gameState = {
   worldHeight: 800,
 };
 
+// update leaderboard
+function updateLeaderboard() {
+  const leaderboard = generateLeaderboard();
+  // const fullLeaderboard = generateFullLeaderboard();
+  const data = {
+    leaderboard: leaderboard,
+    playerCount: Array.from(gameState.players.values()).filter(
+      (player) => player.alive
+    ).length,
+    // fullLeaderboard: fullLeaderboard,
+  };
+  setTimeout(() => io.emit("leaderboardUpdate", data), 200);
+}
+
 // Initialize optimization agents
 const spatialAgent = new SpatialPartitioningAgent(
   gameState.worldWidth,
   gameState.worldHeight,
   100
 );
-const relevancyAgent = new RelevancyScoreAgent();
+// const relevancyAgent = new RelevancyScoreAgent();
 const predictiveAgent = new PredictiveCullingAgent();
 const networkAgent = new NetworkAdaptationAgent();
 
@@ -564,215 +481,215 @@ const networkAgent = new NetworkAdaptationAgent();
 // Client viewport tracking
 const clientViewports = new Map(); // playerId -> viewport bounds
 
-console.log("🚀 Network optimization agents initialized");
-console.log(
-  `📊 Spatial partitioning: ${spatialAgent.getStats().gridWidth}x${
-    spatialAgent.getStats().gridHeight
-  } cells`
-);
+// console.log("🚀 Network optimization agents initialized");
+// console.log(
+//   `📊 Spatial partitioning: ${spatialAgent.getStats().gridWidth}x${
+//     spatialAgent.getStats().gridHeight
+//   } cells`
+// );
 
 // Optimized game state broadcast with spatial culling and relevancy scoring
-function broadcastOptimizedGameState(
-  targetPlayerId = null,
-  eventType = "gameUpdate"
-) {
-  const currentTime = Date.now();
+// function broadcastOptimizedGameState(
+//   targetPlayerId = null,
+//   eventType = "gameUpdate"
+// ) {
+//   const currentTime = Date.now();
 
-  // Get all connected players
-  const connectedPlayers = Array.from(gameState.players.values()).filter(
-    (p) => p.alive
-  );
+//   // Get all connected players
+//   const connectedPlayers = Array.from(gameState.players.values()).filter(
+//     (p) => p.alive
+//   );
 
-  connectedPlayers.forEach((player) => {
-    // Skip if targeting specific player and this isn't the target
-    if (targetPlayerId && player.id !== targetPlayerId) return;
+//   connectedPlayers.forEach((player) => {
+//     // Skip if targeting specific player and this isn't the target
+//     if (targetPlayerId && player.id !== targetPlayerId) return;
 
-    // Apply per-player rate limiting
-    if (!shouldSendUpdateToPlayer(player.id)) {
-      return;
-    }
+//     // Apply per-player rate limiting
+//     if (!shouldSendUpdateToPlayer(player.id)) {
+//       return;
+//     }
 
-    const viewport = clientViewports.get(player.id);
-    if (!viewport) {
-      // Fallback to full game state for players without viewport data
-      const fallbackData = {
-        players: connectedPlayers,
-        foods: gameState.foods,
-        deadPoints: gameState.deadPoints,
-      };
+//     const viewport = clientViewports.get(player.id);
+//     if (!viewport) {
+//       // Fallback to full game state for players without viewport data
+//       const fallbackData = {
+//         players: connectedPlayers,
+//         foods: gameState.foods,
+//         deadPoints: gameState.deadPoints,
+//       };
 
-      // Use binary protocol for fallback as well (with rate limiting already applied)
-      // const optimizedFallback = binaryProtocol.createOptimizedGameState(
-      //   player.id,
-      //   fallbackData
-      // );
-      // const binaryFallback = binaryProtocol.serialize(optimizedFallback);
-      // io.to(player.socketId).emit("binaryGameUpdate", binaryFallback);
-      return;
-    }
+//       // Use binary protocol for fallback as well (with rate limiting already applied)
+//       // const optimizedFallback = binaryProtocol.createOptimizedGameState(
+//       //   player.id,
+//       //   fallbackData
+//       // );
+//       // const binaryFallback = binaryProtocol.serialize(optimizedFallback);
+//       // io.to(player.socketId).emit("binaryGameUpdate", binaryFallback);
+//       return;
+//     }
 
-    // Use spatial partitioning to get relevant objects
-    const relevantPlayers = spatialAgent.getObjectsInViewport(
-      viewport.x,
-      viewport.y,
-      viewport.width,
-      viewport.height,
-      ["players"]
-    );
+//     // Use spatial partitioning to get relevant objects
+//     const relevantPlayers = spatialAgent.getObjectsInViewport(
+//       viewport.x,
+//       viewport.y,
+//       viewport.width,
+//       viewport.height,
+//       ["players"]
+//     );
 
-    const relevantFoods = spatialAgent.getObjectsInViewport(
-      viewport.x,
-      viewport.y,
-      viewport.width,
-      viewport.height,
-      ["foods"]
-    );
+//     const relevantFoods = spatialAgent.getObjectsInViewport(
+//       viewport.x,
+//       viewport.y,
+//       viewport.width,
+//       viewport.height,
+//       ["foods"]
+//     );
 
-    const relevantDeadPoints = spatialAgent.getObjectsInViewport(
-      viewport.x,
-      viewport.y,
-      viewport.width,
-      viewport.height,
-      ["deadPoints"]
-    );
+//     const relevantDeadPoints = spatialAgent.getObjectsInViewport(
+//       viewport.x,
+//       viewport.y,
+//       viewport.width,
+//       viewport.height,
+//       ["deadPoints"]
+//     );
 
-    // Apply relevancy scoring with lower thresholds for better optimization
-    const scoredPlayers = relevancyAgent
-      .scoreObjects(
-        relevantPlayers,
-        viewport.playerX,
-        viewport.playerY,
-        "players"
-      )
-      .filter((obj) => obj.score > 0.01); // Lower threshold for players
+//     // Apply relevancy scoring with lower thresholds for better optimization
+//     const scoredPlayers = relevancyAgent
+//       .scoreObjects(
+//         relevantPlayers,
+//         viewport.playerX,
+//         viewport.playerY,
+//         "players"
+//       )
+//       .filter((obj) => obj.score > 0.01); // Lower threshold for players
 
-    const scoredFoods = relevancyAgent
-      .scoreObjects(relevantFoods, viewport.playerX, viewport.playerY, "foods")
-      .filter((obj) => obj.score > 0.005); // Lower threshold for foods
+//     const scoredFoods = relevancyAgent
+//       .scoreObjects(relevantFoods, viewport.playerX, viewport.playerY, "foods")
+//       .filter((obj) => obj.score > 0.005); // Lower threshold for foods
 
-    const scoredDeadPoints = relevancyAgent
-      .scoreObjects(
-        relevantDeadPoints,
-        viewport.playerX,
-        viewport.playerY,
-        "deadPoints"
-      )
-      .filter((obj) => obj.score > 0.005); // Lower threshold for dead points
+//     const scoredDeadPoints = relevancyAgent
+//       .scoreObjects(
+//         relevantDeadPoints,
+//         viewport.playerX,
+//         viewport.playerY,
+//         "deadPoints"
+//       )
+//       .filter((obj) => obj.score > 0.005); // Lower threshold for dead points
 
-    // Get adaptive update frequency from network agent
-    const playerData = {
-      x: viewport.playerX,
-      y: viewport.playerY,
-      velocityX: player.velocityX || 0,
-      velocityY: player.velocityY || 0,
-      lastActionTime: player.lastActionTime || currentTime,
-      alive: player.alive,
-    };
+//     // Get adaptive update frequency from network agent
+//     const playerData = {
+//       x: viewport.playerX,
+//       y: viewport.playerY,
+//       velocityX: player.velocityX || 0,
+//       velocityY: player.velocityY || 0,
+//       lastActionTime: player.lastActionTime || currentTime,
+//       alive: player.alive,
+//     };
 
-    const serverMetrics = {
-      playerCount: connectedPlayers.length,
-      objectCount: gameState.foods.length + gameState.deadPoints.length,
-    };
+//     const serverMetrics = {
+//       playerCount: connectedPlayers.length,
+//       objectCount: gameState.foods.length + gameState.deadPoints.length,
+//     };
 
-    const allGameObjects = [
-      ...relevantPlayers,
-      ...relevantFoods,
-      ...relevantDeadPoints,
-    ];
-    const updateFreq = networkAgent.getUpdateFrequency(
-      player.id,
-      playerData,
-      allGameObjects,
-      serverMetrics
-    );
-    const shouldUpdate = currentTime - (player.lastUpdate || 0) >= updateFreq;
+//     const allGameObjects = [
+//       ...relevantPlayers,
+//       ...relevantFoods,
+//       ...relevantDeadPoints,
+//     ];
+//     const updateFreq = networkAgent.getUpdateFrequency(
+//       player.id,
+//       playerData,
+//       allGameObjects,
+//       serverMetrics
+//     );
+//     const shouldUpdate = currentTime - (player.lastUpdate || 0) >= updateFreq;
 
-    if (shouldUpdate) {
-      // Create optimized game state with delta compression
-      const gameStateData = {
-        players: scoredPlayers.map((obj) => obj.object),
-        foods: scoredFoods.map((obj) => obj.object),
-        deadPoints: scoredDeadPoints.map((obj) => obj.object),
-        viewport: {
-          x: viewport.x,
-          y: viewport.y,
-          width: viewport.width,
-          height: viewport.height,
-        },
-      };
+//     if (shouldUpdate) {
+//       // Create optimized game state with delta compression
+//       const gameStateData = {
+//         players: scoredPlayers.map((obj) => obj.object),
+//         foods: scoredFoods.map((obj) => obj.object),
+//         deadPoints: scoredDeadPoints.map((obj) => obj.object),
+//         viewport: {
+//           x: round(viewport.x),
+//           y: round(viewport.y),
+//           width: viewport.width,
+//           height: viewport.height,
+//         },
+//       };
 
-      // Use enhanced binary protocol with delta compression
-      // const optimizedData = binaryProtocol.createOptimizedGameState(
-      //   player.id,
-      //   gameStateData
-      // );
+//       // Use enhanced binary protocol with delta compression
+//       // const optimizedData = binaryProtocol.createOptimizedGameState(
+//       //   player.id,
+//       //   gameStateData
+//       // );
 
-      // Send binary data with compression tracking
-      // const binaryData = binaryProtocol.serialize(optimizedData);
-      // io.to(player.socketId).emit("binaryGameUpdate", binaryData);
+//       // Send binary data with compression tracking
+//       // const binaryData = binaryProtocol.serialize(optimizedData);
+//       // io.to(player.socketId).emit("binaryGameUpdate", binaryData);
 
-      // Track bandwidth usage per player
-      if (!player.bandwidthStats) {
-        player.bandwidthStats = {
-          totalBytes: 0,
-          updateCount: 0,
-          startTime: currentTime,
-          deltaUpdates: 0,
-          fullUpdates: 0,
-        };
-      }
-      player.bandwidthStats.totalBytes += binaryData.length;
-      player.bandwidthStats.updateCount++;
+//       // Track bandwidth usage per player
+//       if (!player.bandwidthStats) {
+//         player.bandwidthStats = {
+//           totalBytes: 0,
+//           updateCount: 0,
+//           startTime: currentTime,
+//           deltaUpdates: 0,
+//           fullUpdates: 0,
+//         };
+//       }
+//       player.bandwidthStats.totalBytes += binaryData.length;
+//       player.bandwidthStats.updateCount++;
 
-      // Track update type
-      if (optimizedData.type === "delta") {
-        player.bandwidthStats.deltaUpdates++;
-      } else {
-        player.bandwidthStats.fullUpdates++;
-      }
+//       // Track update type
+//       if (optimizedData.type === "delta") {
+//         player.bandwidthStats.deltaUpdates++;
+//       } else {
+//         player.bandwidthStats.fullUpdates++;
+//       }
 
-      player.lastUpdate = currentTime;
+//       player.lastUpdate = currentTime;
 
-      // Log enhanced optimization stats (reduced frequency)
-      if (Math.random() < 0.05) {
-        // Only log 5% of updates to reduce spam
-        const originalCount =
-          connectedPlayers.length +
-          gameState.foods.length +
-          gameState.deadPoints.length;
-        const optimizedCount =
-          scoredPlayers.length + scoredFoods.length + scoredDeadPoints.length;
-        const spatialReduction = (
-          ((originalCount - optimizedCount) / originalCount) *
-          100
-        ).toFixed(1);
+//       // Log enhanced optimization stats (reduced frequency)
+//       if (Math.random() < 0.05) {
+//         // Only log 5% of updates to reduce spam
+//         const originalCount =
+//           connectedPlayers.length +
+//           gameState.foods.length +
+//           gameState.deadPoints.length;
+//         const optimizedCount =
+//           scoredPlayers.length + scoredFoods.length + scoredDeadPoints.length;
+//         const spatialReduction = (
+//           ((originalCount - optimizedCount) / originalCount) *
+//           100
+//         ).toFixed(1);
 
-        // const binaryStats = binaryProtocol.getStats();
-        const timeElapsed =
-          (currentTime - player.bandwidthStats.startTime) / 1000;
-        const bytesPerSecond =
-          timeElapsed > 0 ? player.bandwidthStats.totalBytes / timeElapsed : 0;
-        const deltaRatio =
-          player.bandwidthStats.updateCount > 0
-            ? (
-                (player.bandwidthStats.deltaUpdates /
-                  player.bandwidthStats.updateCount) *
-                100
-              ).toFixed(1)
-            : 0;
+//         // const binaryStats = binaryProtocol.getStats();
+//         const timeElapsed =
+//           (currentTime - player.bandwidthStats.startTime) / 1000;
+//         const bytesPerSecond =
+//           timeElapsed > 0 ? player.bandwidthStats.totalBytes / timeElapsed : 0;
+//         const deltaRatio =
+//           player.bandwidthStats.updateCount > 0
+//             ? (
+//                 (player.bandwidthStats.deltaUpdates /
+//                   player.bandwidthStats.updateCount) *
+//                 100
+//               ).toFixed(1)
+//             : 0;
 
-        console.log(`🚀 Enhanced Binary Update [${player.id}]:`, {
-          spatial: `${spatialReduction}% reduction (${originalCount}→${optimizedCount})`,
-          // binary: `${binaryStats.compressionRatio.toFixed(1)}% compression`,
-          deltas: `${deltaRatio}% delta updates`,
-          bandwidth: `${(bytesPerSecond / 1024).toFixed(1)} KB/s`,
-          updateType: optimizedData.type,
-          fps: currentRenderFPS,
-        });
-      }
-    }
-  });
-}
+//         console.log(`🚀 Enhanced Binary Update [${player.id}]:`, {
+//           spatial: `${spatialReduction}% reduction (${originalCount}→${optimizedCount})`,
+//           // binary: `${binaryStats.compressionRatio.toFixed(1)}% compression`,
+//           deltas: `${deltaRatio}% delta updates`,
+//           bandwidth: `${(bytesPerSecond / 1024).toFixed(1)} KB/s`,
+//           updateType: optimizedData.type,
+//           fps: currentRenderFPS,
+//         });
+//       }
+//     }
+//   });
+// }
 
 // Update spatial partitioning with current game objects
 function updateSpatialPartitioning() {
@@ -818,14 +735,16 @@ function initializeFoods() {
     const food = {
       id: i,
       // Spawn food within playable area, accounting for wall thickness
-      x:
+      x: round(
         wallThickness +
-        Math.random() * (gameState.worldWidth - 2 * wallThickness),
-      y:
+          Math.random() * (gameState.worldWidth - 2 * wallThickness)
+      ),
+      y: round(
         wallThickness +
-        Math.random() * (gameState.worldHeight - 2 * wallThickness),
+          Math.random() * (gameState.worldHeight - 2 * wallThickness)
+      ),
       radius: FOOD_RADIUS,
-      color: getFoodColorByType(type),
+      // color: getFoodColorByType(type),
       type: type,
     };
     gameState.foods.push(food);
@@ -968,12 +887,7 @@ function checkForStuckPlayers() {
               });
 
               // Update leaderboard after player removal
-              const leaderboard = generateLeaderboard();
-              const fullLeaderboard = generateFullLeaderboard();
-              io.emit("leaderboardUpdate", {
-                leaderboard: leaderboard,
-                fullLeaderboard: fullLeaderboard,
-              });
+              updateLeaderboard();
             }
             return; // Skip further processing for this player
           } else {
@@ -1368,10 +1282,10 @@ function generateOptimalFoodDistribution(
 
     const foodItem = {
       id: `${type}_${timestamp}_${i}`,
-      x: dp.x,
-      y: dp.y,
+      x: round(dp.x),
+      y: round(dp.y),
       radius: FOOD_RADIUS,
-      color: getFoodColorByType(type),
+      // color: getFoodColorByType(type),
       type: type,
       createdAt: timestamp,
       isScoreGenerated: true,
@@ -1382,25 +1296,6 @@ function generateOptimalFoodDistribution(
     };
 
     newFoodItems.push(foodItem);
-
-    const position =
-      segmentIndex === 0
-        ? "HEAD"
-        : segmentIndex === deadPoints.length - 1
-        ? "TAIL"
-        : `${((segmentIndex / (deadPoints.length - 1)) * 100).toFixed(1)}%`;
-  }
-
-  // Calculate actual score generated
-  const actualScore = distribution.reduce(
-    (sum, { value, count }) => sum + value * count,
-    0
-  );
-
-  if (totalFoods < minFoodCount) {
-    console.warn(
-      `⚠️  Warning: Only generated ${totalFoods} foods, below minimum ${minFoodCount}`
-    );
   }
 
   return newFoodItems;
@@ -1830,10 +1725,10 @@ function createBot(id) {
   const bot = {
     id: id,
     socketId: null, // Bots don't have socket connections
-    x: safePosition.x,
-    y: safePosition.y,
+    x: round(safePosition.x),
+    y: round(safePosition.y),
     points: [],
-    angle: safeAngle,
+    angle: round(safeAngle),
     radius: botRadius,
     speed: 1.5,
     color: getRandomColor(),
@@ -1847,13 +1742,13 @@ function createBot(id) {
 
     // Enhanced bot properties for improved movement
     personality: personality,
-    explorationRadius: 10 + Math.random() * 30, // 120-150 pixels
+    explorationRadius: round(120 + Math.random() * 30), // 120-150 pixels
     currentSector: null,
     visitedSectors: new Set(),
     lastSectorChange: Date.now(),
     movementPattern: "straight",
     patternStartTime: Date.now(),
-    patternDuration: 3000 + Math.random() * 2000,
+    patternDuration: round(3000 + Math.random() * 2000),
     momentum: { x: 0, y: 0 },
     wanderTarget: null,
     lastWanderTime: Date.now(),
@@ -1862,9 +1757,9 @@ function createBot(id) {
   // Initialize bot with starting points using bot's main color
   for (let i = 0; i < 20; i++) {
     bot.points.push({
-      x: bot.x - i * 2,
-      y: bot.y,
-      radius: bot.radius,
+      x: round(bot.x - i * 2),
+      y: round(bot.y),
+      radius: round(bot.radius),
       color: bot.color, // Use bot's main color for consistency
       type: getRandomFood(), // Add random food type for variety when bot dies
     });
@@ -2044,12 +1939,7 @@ function handleBotDeath(bot, killerId = null) {
   });
 
   // Update leaderboard after bot removal
-  const leaderboard = generateLeaderboard();
-  const fullLeaderboard = generateFullLeaderboard();
-  io.emit("leaderboardUpdate", {
-    leaderboard: leaderboard,
-    fullLeaderboard: fullLeaderboard,
-  });
+  updateLeaderboard();
 }
 
 // ===== SERVER STATE MANAGEMENT FUNCTIONS =====
@@ -2741,7 +2631,7 @@ function updateBots() {
         }
 
         player.patternStartTime = currentTime;
-        player.patternDuration = 3000 + Math.random() * 4000; // 3-7 seconds
+        player.patternDuration = round(3000 + Math.random() * 4000); // 3-7 seconds
       }
 
       // Long-distance wandering for explorers
@@ -2932,12 +2822,12 @@ function updateBots() {
     if (player.points.length > 0) {
       // Move each point to the position of the point in front of it
       for (let i = player.points.length - 1; i > 0; i--) {
-        player.points[i].x = player.points[i - 1].x;
-        player.points[i].y = player.points[i - 1].y;
+        player.points[i].x = round(player.points[i - 1].x);
+        player.points[i].y = round(player.points[i - 1].y);
       }
-      // Update head position
-      player.points[0].x = player.x;
-      player.points[0].y = player.y;
+      // Update head position with rounding
+      player.points[0].x = round(player.x);
+      player.points[0].y = round(player.y);
     }
 
     // Bot collision detection with food (reuse botHead from collision detection above)
@@ -2971,8 +2861,8 @@ function updateBots() {
           // Add multiple segments based on point value
           for (let i = 0; i < segmentsToAdd; i++) {
             player.points.push({
-              x: tail.x,
-              y: tail.y,
+              x: round(tail.x),
+              y: round(tail.y),
               radius: player.radius,
               color: player.color, // Use bot's main color instead of food color
               type: eatentype, // Store food type for when bot dies
@@ -2985,13 +2875,15 @@ function updateBots() {
         const newtype = getRandomFood();
         // Account for wall thickness (8px inset from boundaries)
         const wallThickness = 8;
-        food.x =
+        food.x = round(
           wallThickness +
-          Math.random() * (gameState.worldWidth - 2 * wallThickness);
-        food.y =
+            Math.random() * (gameState.worldWidth - 2 * wallThickness)
+        );
+        food.y = round(
           wallThickness +
-          Math.random() * (gameState.worldHeight - 2 * wallThickness);
-        food.color = getFoodColorByType(newtype);
+            Math.random() * (gameState.worldHeight - 2 * wallThickness)
+        );
+        // food.color = getFoodColorByType(newtype);
         food.type = newtype;
 
         // console.log(`🍎 Bot ${player.id} ate food ${food.id}: regenerated from (${oldPos.x.toFixed(2)}, ${oldPos.y.toFixed(2)}) to (${food.x.toFixed(2)}, ${food.y.toFixed(2)})`);
@@ -3000,18 +2892,13 @@ function updateBots() {
         io.emit("foodRegenerated", food);
 
         // Broadcast score update
-        io.emit("scoreUpdate", {
-          playerId: player.id,
-          score: Math.round(player.score * 10) / 10,
-        });
+        // io.emit("scoreUpdate", {
+        //   playerId: player.id,
+        //   score: Math.round(player.score * 10) / 10,
+        // });
 
         // Broadcast updated leaderboard
-        const leaderboard = generateLeaderboard();
-        const fullLeaderboard = generateFullLeaderboard();
-        io.emit("leaderboardUpdate", {
-          leaderboard: leaderboard,
-          fullLeaderboard: fullLeaderboard,
-        });
+        updateLeaderboard();
 
         break; // Only eat one food per update cycle
       }
@@ -3052,8 +2939,8 @@ function updateBots() {
             // Add multiple segments based on point value
             for (let i = 0; i < segmentsToAdd; i++) {
               player.points.push({
-                x: tail.x,
-                y: tail.y,
+                x: round(tail.x),
+                y: round(tail.y),
                 radius: player.radius,
                 color: player.color, // Use bot's main color for consistency
                 type: deadPoint.type || "watermelon", // Preserve food type from consumed dead point
@@ -3073,18 +2960,13 @@ function updateBots() {
           });
 
           // Broadcast score update
-          io.emit("scoreUpdate", {
-            playerId: player.id,
-            score: Math.round(player.score * 10) / 10,
-          });
+          // io.emit("scoreUpdate", {
+          //   playerId: player.id,
+          //   score: Math.round(player.score * 10) / 10,
+          // });
 
           // Broadcast updated leaderboard
-          const leaderboard = generateLeaderboard();
-          const fullLeaderboard = generateFullLeaderboard();
-          io.emit("leaderboardUpdate", {
-            leaderboard: leaderboard,
-            fullLeaderboard: fullLeaderboard,
-          });
+          updateLeaderboard();
 
           break; // Only eat one dead point per update cycle
         } else {
@@ -3159,24 +3041,13 @@ io.on("connection", (socket) => {
       playerRadius
     );
 
-    // console.log(
-    //   `👤 DEBUG: Creating player ${playerId} (${
-    //     userName || "Anonymous"
-    //   }) at position (${safePosition.x.toFixed(2)}, ${safePosition.y.toFixed(
-    //     2
-    //   )}) with safe angle ${safeAngle.toFixed(3)} radians (${(
-    //     (safeAngle * 180) /
-    //     Math.PI
-    //   ).toFixed(1)}°)`
-    // );
-
     const newPlayer = {
       id: playerId,
       socketId: socket.id,
-      x: safePosition.x,
-      y: safePosition.y,
+      x: round(safePosition.x),
+      y: round(safePosition.y),
       points: [],
-      angle: safeAngle,
+      angle: round(safeAngle),
       radius: playerRadius,
       speed: 0.9,
       color: getRandomColor(),
@@ -3190,17 +3061,11 @@ io.on("connection", (socket) => {
       isBot: false, // Mark as human player
     };
 
-    // console.log(
-    //   `🛡️ DEBUG: Player ${playerId} spawn protection enabled until ${new Date(
-    //     newPlayer.spawnTime + 3000
-    //   ).toLocaleTimeString()}`
-    // );
-
     // Initialize player with starting points using player's main color
     for (let i = 0; i < 25; i++) {
       newPlayer.points.push({
-        x: newPlayer.x - i * 2,
-        y: newPlayer.y,
+        x: round(newPlayer.x - i * 2),
+        y: round(newPlayer.y),
         radius: newPlayer.radius,
         color: newPlayer.color, // Use player's main color for consistency
       });
@@ -3248,23 +3113,13 @@ io.on("connection", (socket) => {
     // }, 1000); // Give client time to set up viewport tracking
 
     // Send initial leaderboard to new player
-    const initialLeaderboard = generateLeaderboard();
-    const initialFullLeaderboard = generateFullLeaderboard();
-    socket.emit("leaderboardUpdate", {
-      leaderboard: initialLeaderboard,
-      fullLeaderboard: initialFullLeaderboard,
-    });
+    updateLeaderboard(socket);
 
     // Broadcast new player to all other players
     socket.broadcast.emit("playerJoined", newPlayer);
 
     // Broadcast updated leaderboard to all players
-    const updatedLeaderboard = generateLeaderboard();
-    const updatedFullLeaderboard = generateFullLeaderboard();
-    io.emit("leaderboardUpdate", {
-      leaderboard: updatedLeaderboard,
-      fullLeaderboard: updatedFullLeaderboard,
-    });
+    updateLeaderboard();
   });
 
   // Handle player movement
@@ -3305,9 +3160,9 @@ io.on("connection", (socket) => {
         currentTime - player.spawnTime < spawnProtectionDuration;
       socket.broadcast.emit("playerMoved", {
         playerId: data.playerId,
-        x: data.x,
-        y: data.y,
-        angle: data.angle,
+        x: round(data.x),
+        y: round(data.y),
+        angle: round(data.angle),
         points: data.points,
         spawnProtection: hasSpawnProtection,
       });
@@ -3397,18 +3252,13 @@ io.on("connection", (socket) => {
       });
 
       // Broadcast score update
-      io.emit("scoreUpdate", {
-        playerId: playerId,
-        score: Math.round(player.score * 10) / 10,
-      });
+      // io.emit("scoreUpdate", {
+      //   playerId: playerId,
+      //   score: Math.round(player.score * 10) / 10,
+      // });
 
       // Broadcast updated leaderboard
-      const leaderboard = generateLeaderboard();
-      const fullLeaderboard = generateFullLeaderboard();
-      io.emit("leaderboardUpdate", {
-        leaderboard: leaderboard,
-        fullLeaderboard: fullLeaderboard,
-      });
+      updateLeaderboard();
     }
   });
 
@@ -3480,18 +3330,13 @@ io.on("connection", (socket) => {
       // Only broadcast score and leaderboard updates if points were actually consumed
       if (consumedCount > 0) {
         // Broadcast score update
-        io.emit("scoreUpdate", {
-          playerId: playerId,
-          score: player.score,
-        });
+        // io.emit("scoreUpdate", {
+        //   playerId: playerId,
+        //   score: player.score,
+        // });
 
         // Broadcast updated leaderboard
-        const leaderboard = generateLeaderboard();
-        const fullLeaderboard = generateFullLeaderboard();
-        io.emit("leaderboardUpdate", {
-          leaderboard: leaderboard,
-          fullLeaderboard: fullLeaderboard,
-        });
+        updateLeaderboard();
       }
     }
   });
@@ -3559,12 +3404,7 @@ io.on("connection", (socket) => {
       io.emit("playerDisconnected", data.playerId);
 
       // Update leaderboard after bot removal
-      const leaderboard = generateLeaderboard();
-      const fullLeaderboard = generateFullLeaderboard();
-      io.emit("leaderboardUpdate", {
-        leaderboard: leaderboard,
-        fullLeaderboard: fullLeaderboard,
-      });
+      updateLeaderboard();
     } else {
       // Respawn human player after 3 seconds
       setTimeout(() => {
@@ -3579,9 +3419,9 @@ io.on("connection", (socket) => {
 
           const respawnedPlayer = {
             ...player,
-            x: safePosition.x,
-            y: safePosition.y,
-            angle: safeAngle,
+            x: round(safePosition.x),
+            y: round(safePosition.y),
+            angle: round(safeAngle),
             points: [],
             alive: true,
             score: 0,
@@ -3592,9 +3432,9 @@ io.on("connection", (socket) => {
           // Initialize respawned player with starting points using player's main color
           for (let i = 0; i < 25; i++) {
             respawnedPlayer.points.push({
-              x: respawnedPlayer.x - i * 2,
-              y: respawnedPlayer.y,
-              radius: respawnedPlayer.radius,
+              x: round(respawnedPlayer.x - i * 2),
+              y: round(respawnedPlayer.y),
+              radius: round(respawnedPlayer.radius),
               color: respawnedPlayer.color, // Use player's main color for consistency
             });
           }
@@ -3663,12 +3503,7 @@ io.on("connection", (socket) => {
       });
 
       // Broadcast updated leaderboard after player leaves
-      const leaderboard = generateLeaderboard();
-      const fullLeaderboard = generateFullLeaderboard();
-      io.emit("leaderboardUpdate", {
-        leaderboard: leaderboard,
-        fullLeaderboard: fullLeaderboard,
-      });
+      updateLeaderboard();
 
       console.log("Player", data.playerId, "successfully left the room");
     }
@@ -3758,12 +3593,7 @@ io.on("connection", (socket) => {
             });
 
             // Broadcast updated leaderboard after player leaves
-            const leaderboard = generateLeaderboard();
-            const fullLeaderboard = generateFullLeaderboard();
-            io.emit("leaderboardUpdate", {
-              leaderboard: leaderboard,
-              fullLeaderboard: fullLeaderboard,
-            });
+            updateLeaderboard();
           }
         }, 4000); // 4 second delay
       } else if (player && !player.alive) {
@@ -3778,12 +3608,7 @@ io.on("connection", (socket) => {
         });
 
         // Broadcast updated leaderboard after player leaves
-        const leaderboard = generateLeaderboard();
-        const fullLeaderboard = generateFullLeaderboard();
-        io.emit("leaderboardUpdate", {
-          leaderboard: leaderboard,
-          fullLeaderboard: fullLeaderboard,
-        });
+        updateLeaderboard();
       }
     }
   });
@@ -3857,18 +3682,18 @@ function startBotIntervals() {
 
             // Ensure bot points have the same detailed structure as human players
             const formattedPoints = player.points.map((p) => ({
-              x: p.x || p.x === 0 ? p.x : player.x,
-              y: p.y || p.y === 0 ? p.y : player.y,
-              radius: p.radius || player.radius || 8,
+              x: round(p.x || p.x === 0 ? p.x : player.x),
+              y: round(p.y || p.y === 0 ? p.y : player.y),
+              radius: round(p.radius || player.radius || 8),
               color: p.color || player.color,
               type: p.type || "watermelon",
             }));
 
             io.emit("playerMoved", {
               playerId: player.id,
-              x: player.x,
-              y: player.y,
-              angle: player.angle * (180 / Math.PI), // Convert radians to degrees for client
+              x: round(player.x),
+              y: round(player.y),
+              angle: round(player.angle * (180 / Math.PI)), // Convert radians to degrees for client
               points: formattedPoints,
               spawnProtection: hasSpawnProtection,
             });
@@ -3928,12 +3753,7 @@ function maintainOptimizedBots() {
       });
 
       // Update leaderboard after removing all bots
-      const leaderboard = generateLeaderboard();
-      const fullLeaderboard = generateFullLeaderboard();
-      io.emit("leaderboardUpdate", {
-        leaderboard: leaderboard,
-        fullLeaderboard: fullLeaderboard,
-      });
+      updateLeaderboard();
     }
     return; // Exit early - no need to spawn bots
   }
@@ -3967,12 +3787,7 @@ function maintainOptimizedBots() {
     });
 
     // Update leaderboard after bot removal
-    const leaderboard = generateLeaderboard();
-    const fullLeaderboard = generateFullLeaderboard();
-    io.emit("leaderboardUpdate", {
-      leaderboard: leaderboard,
-      fullLeaderboard: fullLeaderboard,
-    });
+    updateLeaderboard();
   }
 
   // Spawn bots if needed using debounced system
@@ -4009,61 +3824,45 @@ function generateLeaderboard() {
     id: player.id,
     name:
       player.userName ||
-      (player.isBot
-        ? `Player ${player.id.replace("bot-", "")}`
-        : `Player ${player.id}`),
+      (player.isBot ? `${player.id.replace("bot-", "")}` : `${player.id}`),
     score: player.score,
     rank: index + 1, // This is the actual rank in the full leaderboard
     isBot: player.isBot || false,
     realUserId: player.realUserId || null,
   }));
 
-  // Return top 10 players for the leaderboard display
-  // The client will handle showing current player if they're not in top 10
-  return playersWithRanks.slice(0, 10);
+  const currentPlayerId = playersWithRanks.find((p) => !!p.realUserId)?.id;
+
+  // If currentPlayerId is provided, ensure they're always included
+  if (currentPlayerId) {
+    const currentPlayer = playersWithRanks.find(
+      (p) => p.id === currentPlayerId
+    );
+
+    if (!currentPlayer) {
+      // Current player not found in alive players, return top 10
+      const top10Players = playersWithRanks.slice(0, 10);
+      return top10Players;
+    }
+
+    // Check if current player is in top 10
+    const currentPlayerRank = currentPlayer.rank;
+
+    if (currentPlayerRank <= 10) {
+      // Current player is in top 10, return top 10
+      const top10Players = playersWithRanks.slice(0, 10);
+      return top10Players;
+    } else {
+      // Current player is not in top 10, return top 9 + current player
+      const top9Players = playersWithRanks.slice(0, 9);
+      return [...top9Players, currentPlayer];
+    }
+  }
+
+  // No specific player requested, return top 10 for caching
+  const top10Players = playersWithRanks.slice(0, 10);
+  return top10Players;
 }
-
-// Generate full leaderboard data (for finding current player's rank)
-function generateFullLeaderboard() {
-  const allAlivePlayers = Array.from(gameState.players.values())
-    .filter((player) => player.alive)
-    .sort((a, b) => b.score - a.score);
-
-  return allAlivePlayers.map((player, index) => ({
-    id: player.id,
-    name:
-      player.userName ||
-      (player.isBot
-        ? `Player ${player.id.replace("bot-", "")}`
-        : `Player ${player.id}`),
-    score: player.score,
-    rank: index + 1,
-    isBot: player.isBot || false,
-    realUserId: player.realUserId || null,
-  }));
-}
-
-// Send periodic game state updates
-// setInterval(() => {
-//   const playerCount = gameState.players.size;
-//   const leaderboard = generateLeaderboard();
-
-//   io.emit("gameStats", {
-//     playerCount: playerCount,
-//     foodCount: gameState.foods.length,
-//     leaderboard: leaderboard,
-//   });
-// }, 5000);
-
-// // Send leaderboard updates more frequently
-// setInterval(() => {
-//   const leaderboard = generateLeaderboard();
-//   const fullLeaderboard = generateFullLeaderboard();
-//   io.emit("leaderboardUpdate", {
-//     leaderboard: leaderboard,
-//     fullLeaderboard: fullLeaderboard,
-//   });
-// }, 300);
 
 // Health check endpoint for Docker
 app.get("/health", (req, res) => {
