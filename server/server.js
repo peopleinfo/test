@@ -9,40 +9,44 @@ const {
 const RelevancyScoreAgent = require("./agents/RelevancyScoreAgent");
 const { PredictiveCullingAgent } = require("./agents/PredictiveCullingAgent");
 const { NetworkAdaptationAgent } = require("./agents/NetworkAdaptationAgent");
+const msgpackrParser = require("./utils/sgpackr-parser-server-native");
 
 // Import binary protocol for optimized data transmission
-const BinaryProtocol = require("./utils/binaryProtocol");
+// const BinaryProtocol = require("./utils/binaryProtocol");
 
 const app = express();
 const server = http.createServer(app);
 const io = socketIo(server, {
+  parser: msgpackrParser,
   cors: {
     origin: "*",
     methods: ["GET", "POST"],
   },
   transports: ["websocket"],
-  // transports: ["websocket", "polling"],
+  // ✅ KEEP: Prevent upgrade attempts
+  upgrade: false,
+
+  // ❌ REMOVE: Not needed with WebSocket-only
+  // rememberUpgrade: false,
+
+  // ⚠️ OPTIONAL: Only if supporting old Engine.IO v3 clients
   allowEIO3: true,
-  // Enhanced compression settings
-  compression: true,
-  httpCompression: {
-    threshold: 1024, // Compress messages larger than 1KB
-    level: 6, // Compression level (1-9, 6 is good balance)
-    chunkSize: 1024,
-  },
-  // Optimize for performance
-  perMessageDeflate: {
-    threshold: 1024,
-    zlibDeflateOptions: {
-      level: 6,
-      chunkSize: 1024,
-    },
-  },
-  // Connection optimization
+
+  // ❌ REMOVE: Compression conflicts with msgpackr!
+  // msgpackr already compresses data efficiently
+  // Double compression can actually make it SLOWER
+  // compression: true,
+  // httpCompression: { ... },
+  // perMessageDeflate: { ... },
+
+  // ✅ KEEP: Connection optimization
   pingTimeout: 60000,
   pingInterval: 25000,
   upgradeTimeout: 10000,
-  maxHttpBufferSize: 1e6, // 1MB max message size
+
+  // ✅ ADJUST: Increase for msgpackr efficiency
+  // msgpackr handles large payloads better
+  maxHttpBufferSize: 10e6, // 10MB instead of 1MB
 });
 
 // Token validation utility
@@ -109,13 +113,8 @@ const MAX_BOTS = MIN_PLAYERS_FOR_BATTLE;
 const POINT = 3; // Points awarded for eating food or dead points
 const FOOD_RADIUS = 5.5;
 
-// Client rendering - smooth visuals
-// const RENDER_FPS = 60; // 16ms
-// Network updates - optimized bandwidth
-const BASE_RENDER_FPS = 50; // 20ms base interval
-// const RENDER_FPS = 20; // 50ms
-// Game logic - consistent gameplay
-// const RENDER_FPS = 30; // 33ms
+const SNAKE_SEGMENT_SCALE = 0.06; // Size of each snake segment
+const SNAKE_SEGMENT_DEFAULT = 10; // Size of each snake segment
 
 // ===== ADAPTIVE RATE LIMITING CONFIGURATION =====
 const RATE_LIMITING_CONFIG = {
@@ -560,7 +559,7 @@ const predictiveAgent = new PredictiveCullingAgent();
 const networkAgent = new NetworkAdaptationAgent();
 
 // Initialize binary protocol for optimized data transmission
-const binaryProtocol = new BinaryProtocol();
+// const binaryProtocol = new BinaryProtocol();
 
 // Client viewport tracking
 const clientViewports = new Map(); // playerId -> viewport bounds
@@ -603,12 +602,12 @@ function broadcastOptimizedGameState(
       };
 
       // Use binary protocol for fallback as well (with rate limiting already applied)
-      const optimizedFallback = binaryProtocol.createOptimizedGameState(
-        player.id,
-        fallbackData
-      );
-      const binaryFallback = binaryProtocol.serialize(optimizedFallback);
-      io.to(player.socketId).emit("binaryGameUpdate", binaryFallback);
+      // const optimizedFallback = binaryProtocol.createOptimizedGameState(
+      //   player.id,
+      //   fallbackData
+      // );
+      // const binaryFallback = binaryProtocol.serialize(optimizedFallback);
+      // io.to(player.socketId).emit("binaryGameUpdate", binaryFallback);
       return;
     }
 
@@ -703,14 +702,14 @@ function broadcastOptimizedGameState(
       };
 
       // Use enhanced binary protocol with delta compression
-      const optimizedData = binaryProtocol.createOptimizedGameState(
-        player.id,
-        gameStateData
-      );
+      // const optimizedData = binaryProtocol.createOptimizedGameState(
+      //   player.id,
+      //   gameStateData
+      // );
 
       // Send binary data with compression tracking
-      const binaryData = binaryProtocol.serialize(optimizedData);
-      io.to(player.socketId).emit("binaryGameUpdate", binaryData);
+      // const binaryData = binaryProtocol.serialize(optimizedData);
+      // io.to(player.socketId).emit("binaryGameUpdate", binaryData);
 
       // Track bandwidth usage per player
       if (!player.bandwidthStats) {
@@ -748,7 +747,7 @@ function broadcastOptimizedGameState(
           100
         ).toFixed(1);
 
-        const binaryStats = binaryProtocol.getStats();
+        // const binaryStats = binaryProtocol.getStats();
         const timeElapsed =
           (currentTime - player.bandwidthStats.startTime) / 1000;
         const bytesPerSecond =
@@ -764,7 +763,7 @@ function broadcastOptimizedGameState(
 
         console.log(`🚀 Enhanced Binary Update [${player.id}]:`, {
           spatial: `${spatialReduction}% reduction (${originalCount}→${optimizedCount})`,
-          binary: `${binaryStats.compressionRatio.toFixed(1)}% compression`,
+          // binary: `${binaryStats.compressionRatio.toFixed(1)}% compression`,
           deltas: `${deltaRatio}% delta updates`,
           bandwidth: `${(bytesPerSecond / 1024).toFixed(1)} KB/s`,
           updateType: optimizedData.type,
@@ -1006,7 +1005,7 @@ function startOptimizedGameLoop() {
     checkForStuckPlayers();
 
     // Broadcast optimized game state to all players with rate limiting
-    broadcastOptimizedGameState(null, "gameUpdate");
+    // broadcastOptimizedGameState(null, "gameUpdate");
 
     // Update predictive agent predictions
     predictiveAgent.updatePredictions();
@@ -2954,8 +2953,15 @@ function updateBots() {
         // Bot eats food - same logic as human players
         player.score += pointValue;
 
-        // Add multiple segments based on food point value (1 segment = 10 points)
-        const segmentsToAdd = Math.max(1, Math.floor(pointValue / 10));
+        const pointSegment =
+          pointValue >= 1100
+            ? Math.floor(pointValue * SNAKE_SEGMENT_SCALE)
+            : SNAKE_SEGMENT_DEFAULT;
+
+        const segmentsToAdd = Math.max(
+          1,
+          Math.floor(pointValue / pointSegment)
+        );
         console.log(
           `🤖 Bot ${player.id} eating ${eatentype}: ${pointValue} points = ${segmentsToAdd} segments`
         );
@@ -3027,9 +3033,16 @@ function updateBots() {
 
           // Bot eats dead point - award points based on food type
           player.score += pointValue;
+          const pointSegment =
+            pointValue >= 1100
+              ? Math.floor(pointValue * SNAKE_SEGMENT_SCALE)
+              : SNAKE_SEGMENT_DEFAULT;
 
           // Add multiple segments based on dead point value (1 segment = 10 points)
-          const segmentsToAdd = Math.max(1, Math.floor(pointValue / 10));
+          const segmentsToAdd = Math.max(
+            1,
+            Math.floor(pointValue / pointSegment)
+          );
           console.log(
             `🤖 Bot ${player.id} eating dead point ${deadPointType}: ${pointValue} points = ${segmentsToAdd} segments`
           );
@@ -3092,38 +3105,11 @@ function updateBots() {
 // Initialize game
 initializeFoods();
 
-// TEMPORARY: Test function to force bot death and create dead snake food
-function testDeadSnakeFood() {
-  console.log(
-    "🧪 TESTING: Forcing bot death to test dead snake food animation"
-  );
-  const bots = Array.from(gameState.players.values()).filter(
-    (p) => p.isBot && p.alive
-  );
-  if (bots.length > 0) {
-    const testBot = bots[0];
-    console.log(
-      `🧪 TESTING: Killing bot ${testBot.id} at position (${testBot.x}, ${testBot.y}) with score ${testBot.score}`
-    );
-    handleBotDeath(testBot);
-  } else {
-    console.log("🧪 TESTING: No alive bots found to kill");
-  }
-}
-
-// TEMPORARY: Auto-trigger test after 10 seconds
-// setTimeout(() => {
-//   testDeadSnakeFood();
-// }, 10000);
-// // console.log(
-//   `🎮 Game initialized: ${gameState.foods.length} foods spawned in ${gameState.worldWidth}x${gameState.worldHeight} world`
-// );
-
 // Spawn initial bots for testing
-setTimeout(() => {
-  console.log("🤖 Spawning initial bots for game testing...");
-  spawnBots(5);
-}, 1000);
+// setTimeout(() => {
+//   console.log("🤖 Spawning initial bots for game testing...");
+//   spawnBots(5);
+// }, 1000);
 
 io.on("connection", (socket) => {
   console.log("Player connected:", socket.id);
@@ -3257,9 +3243,9 @@ io.on("connection", (socket) => {
     });
 
     // Start sending optimized updates to this player
-    setTimeout(() => {
-      broadcastOptimizedGameState(playerId, "gameUpdate");
-    }, 1000); // Give client time to set up viewport tracking
+    // setTimeout(() => {
+    //   broadcastOptimizedGameState(playerId, "gameUpdate");
+    // }, 1000); // Give client time to set up viewport tracking
 
     // Send initial leaderboard to new player
     const initialLeaderboard = generateLeaderboard();
