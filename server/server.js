@@ -331,9 +331,9 @@ function performAggressiveCleanup() {
   if (deadPointsToRemove > 0) {
     gameState.deadPoints.splice(0, deadPointsToRemove);
     performanceMetrics.deadPointsCleanedUp += deadPointsToRemove;
-    console.log(
-      `🧹 MEMORY: Removed ${deadPointsToRemove} dead points aggressively`
-    );
+    // console.log(
+    //   `🧹 MEMORY: Removed ${deadPointsToRemove} dead points aggressively`
+    // );
   }
 
   // Remove excess bots if any
@@ -372,15 +372,15 @@ function cleanupDisconnectedPlayers() {
     ) {
       gameState.players.delete(playerId);
       cleanedCount++;
-      console.log(`🧹 Cleaned up old dead player ${playerId}`);
+      // console.log(`🧹 Cleaned up old dead player ${playerId}`);
     }
   }
 
-  if (cleanedCount > 0) {
-    console.log(
-      `🧹 MEMORY: Cleaned up ${cleanedCount} old dead disconnected players`
-    );
-  }
+  // if (cleanedCount > 0) {
+  //   console.log(
+  //     `🧹 MEMORY: Cleaned up ${cleanedCount} old dead disconnected players`
+  //   );
+  // }
 }
 
 // Log detailed memory statistics
@@ -399,7 +399,7 @@ function logMemoryStats() {
 function logPerformanceMetrics() {
   const currentTime = Date.now();
 
-  console.log("\n🚀 ===== PERFORMANCE METRICS REPORT =====");
+  // console.log("\n🚀 ===== PERFORMANCE METRICS REPORT =====");
 
   // Performance timing (if available)
   if (performanceMetrics.totalRequests > 0) {
@@ -1002,7 +1002,7 @@ function getPointValueByType(type) {
     case "orange":
       return 12;
     case "grapes":
-      return 100;
+      return 15;
     default:
       return POINT;
   }
@@ -1461,7 +1461,7 @@ function isPositionSafe(x, y, radius, minDistance = 200) {
 
 // Find safe spawn position - enhanced with better distribution and emergency fallback
 function findSafeSpawnPosition(radius) {
-  console.log(`🎯 DEBUG: Finding safe spawn position for radius ${radius}`);
+  // console.log(`🎯 DEBUG: Finding safe spawn position for radius ${radius}`);
   const spawnZones = getSpawnZones();
   const maxZoneAttempts = 50; // Increased per-zone attempts for better success rate
   const maxFallbackAttempts = 150; // Further increased fallback attempts
@@ -1506,7 +1506,7 @@ function findSafeSpawnPosition(radius) {
     }
   }
 
-  console.log(`⚠️ DEBUG: All zones failed, trying enhanced fallback positions`);
+  // console.log(`⚠️ DEBUG: All zones failed, trying enhanced fallback positions`);
   // Enhanced fallback: try scattered positions across the entire map
   for (let attempt = 0; attempt < maxFallbackAttempts; attempt++) {
     const margin = 80;
@@ -1554,7 +1554,7 @@ function findSafeSpawnPosition(radius) {
   }
 
   // Strategy 2: Grid-based systematic search
-  console.log(`🔍 DEBUG: Trying systematic grid search`);
+  // console.log(`🔍 DEBUG: Trying systematic grid search`);
   const gridSize = 8;
   const stepX = (gameState.worldWidth - 200) / gridSize;
   const stepY = (gameState.worldHeight - 200) / gridSize;
@@ -1570,7 +1570,7 @@ function findSafeSpawnPosition(radius) {
     }
   }
 
-  console.log(`🚨 DEBUG: All methods failed, using safe edge position`);
+  // console.log(`🚨 DEBUG: All methods failed, using safe edge position`);
   // Absolute last resort: safe edge position
   const edge = Math.floor(Math.random() * 4);
   const safeMargin = 100;
@@ -1868,6 +1868,10 @@ function spawnSingleBot(botId) {
 
   // Broadcast new bot to all players
   io.emit("playerJoined", bot);
+  setTimeout(() => {
+    // Update leaderboard after bot spawn
+    updateLeaderboard();
+  }, 500);
 }
 
 // Legacy function for backward compatibility - now uses debounced system
@@ -1979,9 +1983,9 @@ function pauseServer() {
       gameState.players.delete(bot.id);
       io.emit("playerDisconnected", bot.id);
     }
-    console.log(
-      `🤖 SERVER: Removed ${botsToRemove} bots during pause (keeping ${PERFORMANCE_CONFIG.MIN_BOTS_IDLE})`
-    );
+    // console.log(
+    //   `🤖 SERVER: Removed ${botsToRemove} bots during pause (keeping ${PERFORMANCE_CONFIG.MIN_BOTS_IDLE})`
+    // );
   }
 
   // Start idle game loop with reduced frequency
@@ -2124,11 +2128,11 @@ function performFoodCleanup(targetReduction = 50) {
       regularFoods.length
     );
 
-    console.log(
-      `🧹 HIGH CAPACITY (${(capacityPercentage * 100).toFixed(
-        1
-      )}%): Removing ${totalToRemove} foods (60% score-generated: ${scoreGeneratedToRemove}, 40% regular: ${regularFoodsToRemove})`
-    );
+    // console.log(
+    //   `🧹 HIGH CAPACITY (${(capacityPercentage * 100).toFixed(
+    //     1
+    //   )}%): Removing ${totalToRemove} foods (60% score-generated: ${scoreGeneratedToRemove}, 40% regular: ${regularFoodsToRemove})`
+    // );
   } else {
     // Below 94%, maintain 60/40 ratio for balanced cleanup
     const totalToRemove = Math.min(
@@ -2754,11 +2758,11 @@ function updateBots() {
     // Relaxed boundary collision detection - give bots small buffer to prevent excessive deaths
     if (newX < minX || newX > maxX || newY < minY || newY > maxY) {
       // Bot dies from boundary collision - relaxed enforcement with buffer
-      console.log(
-        `Bot ${player.id} died at boundary: position (${newX.toFixed(
-          2
-        )}, ${newY.toFixed(2)}), bounds: x[${minX}-${maxX}], y[${minY}-${maxY}]`
-      );
+      // console.log(
+      //   `Bot ${player.id} died at boundary: position (${newX.toFixed(
+      //     2
+      //   )}, ${newY.toFixed(2)}), bounds: x[${minX}-${maxX}], y[${minY}-${maxY}]`
+      // );
       handleBotDeath(player);
       return;
     }
@@ -2779,9 +2783,9 @@ function updateBots() {
       currentTime - player.spawnTime >= spawnProtectionDuration
     ) {
       player.spawnProtection = false;
-      console.log(
-        `🛡️ DEBUG: Spawn protection removed for bot ${player.id} during update`
-      );
+      // console.log(
+      //   `🛡️ DEBUG: Spawn protection removed for bot ${player.id} during update`
+      // );
     }
 
     // Check collision with other players/bots before updating position
@@ -2852,9 +2856,9 @@ function updateBots() {
           1,
           Math.floor(pointValue / pointSegment)
         );
-        console.log(
-          `🤖 Bot ${player.id} eating ${eatentype}: ${pointValue} points = ${segmentsToAdd} segments`
-        );
+        // console.log(
+        //   `🤖 Bot ${player.id} eating ${eatentype}: ${pointValue} points = ${segmentsToAdd} segments`
+        // );
 
         if (player.points.length > 0) {
           const tail = player.points[player.points.length - 1];
@@ -2930,9 +2934,9 @@ function updateBots() {
             1,
             Math.floor(pointValue / pointSegment)
           );
-          console.log(
-            `🤖 Bot ${player.id} eating dead point ${deadPointType}: ${pointValue} points = ${segmentsToAdd} segments`
-          );
+          // console.log(
+          //   `🤖 Bot ${player.id} eating dead point ${deadPointType}: ${pointValue} points = ${segmentsToAdd} segments`
+          // );
 
           if (player.points.length > 0) {
             const tail = player.points[player.points.length - 1];
@@ -2971,13 +2975,13 @@ function updateBots() {
           break; // Only eat one dead point per update cycle
         } else {
           // Dead point is protected due to age
-          console.log(
-            `🛡️ Bot ${
-              player.id
-            } attempted to eat protected dead point (age: ${Math.round(
-              age / 1000
-            )}s < ${CLEANUP_INTERVAL / 1000}s)`
-          );
+          // console.log(
+          //   `🛡️ Bot ${
+          //     player.id
+          //   } attempted to eat protected dead point (age: ${Math.round(
+          //     age / 1000
+          //   )}s < ${CLEANUP_INTERVAL / 1000}s)`
+          // );
         }
       }
     }
@@ -2994,7 +2998,7 @@ initializeFoods();
 // }, 1000);
 
 io.on("connection", (socket) => {
-  console.log("Player connected:", socket.id);
+  // console.log("Player connected:", socket.id);
 
   // Handle ping/pong for latency measurement
   socket.on("ping", (data) => {
@@ -3113,7 +3117,7 @@ io.on("connection", (socket) => {
     // }, 1000); // Give client time to set up viewport tracking
 
     // Send initial leaderboard to new player
-    updateLeaderboard(socket);
+    updateLeaderboard();
 
     // Broadcast new player to all other players
     socket.broadcast.emit("playerJoined", newPlayer);
@@ -3149,9 +3153,9 @@ io.on("connection", (socket) => {
         currentTime - player.spawnTime >= spawnProtectionDuration
       ) {
         player.spawnProtection = false;
-        console.log(
-          `🛡️ DEBUG: Spawn protection removed for player ${data.playerId} during movement`
-        );
+        // console.log(
+        //   `🛡️ DEBUG: Spawn protection removed for player ${data.playerId} during movement`
+        // );
       }
 
       // Broadcast movement to all other players with current spawn protection status
@@ -3196,11 +3200,11 @@ io.on("connection", (socket) => {
         Date.now()
       );
 
-      console.log(
-        `🔍 Viewport updated for ${playerId}: (${x?.toFixed(1) || "N/A"}, ${
-          y?.toFixed(1) || "N/A"
-        }) ${width?.toFixed(1) || "N/A"}x${height?.toFixed(1) || "N/A"}`
-      );
+      // console.log(
+      //   `🔍 Viewport updated for ${playerId}: (${x?.toFixed(1) || "N/A"}, ${
+      //     y?.toFixed(1) || "N/A"
+      //   }) ${width?.toFixed(1) || "N/A"}x${height?.toFixed(1) || "N/A"}`
+      // );
     }
   });
 
@@ -3505,7 +3509,7 @@ io.on("connection", (socket) => {
       // Broadcast updated leaderboard after player leaves
       updateLeaderboard();
 
-      console.log("Player", data.playerId, "successfully left the room");
+      // console.log("Player", data.playerId, "successfully left the room");
     }
   });
 
@@ -3524,9 +3528,9 @@ io.on("connection", (socket) => {
     if (disconnectedPlayerId) {
       const player = gameState.players.get(disconnectedPlayerId);
       if (player && player.alive) {
-        console.log(
-          `📱 Player ${disconnectedPlayerId} disconnected while alive - starting disconnect delay`
-        );
+        // console.log(
+        //   `📱 Player ${disconnectedPlayerId} disconnected while alive - starting disconnect delay`
+        // );
 
         // Mark player as disconnected but keep them in game for 4 seconds
         player.isDisconnected = true;
