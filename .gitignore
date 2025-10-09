@@ -1,2 +1,3 @@
 # Ignore extracted worm-zone-main directory
 worm-zone-main/
+node_modules/
