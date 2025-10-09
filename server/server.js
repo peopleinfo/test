@@ -1772,9 +1772,6 @@ function pauseServer() {
       gameState.players.delete(bot.id);
       io.emit("playerDisconnected", bot.id);
     }
-    // console.log(
-    //   `🤖 SERVER: Removed ${botsToRemove} bots during pause (keeping ${PERFORMANCE_CONFIG.MIN_BOTS_IDLE})`
-    // );
   }
 
   // Start idle game loop with reduced frequency
@@ -1916,12 +1913,6 @@ function performFoodCleanup(targetReduction = 50) {
       Math.floor(totalToRemove * 0.4),
       regularFoods.length
     );
-
-    // console.log(
-    //   `🧹 HIGH CAPACITY (${(capacityPercentage * 100).toFixed(
-    //     1
-    //   )}%): Removing ${totalToRemove} foods (60% score-generated: ${scoreGeneratedToRemove}, 40% regular: ${regularFoodsToRemove})`
-    // );
   } else {
     // Below 94%, maintain 60/40 ratio for balanced cleanup
     const totalToRemove = Math.min(
@@ -2184,23 +2175,6 @@ function performSmartDeadPointCleanup(forceCleanup = false) {
       remainingCount: gameState.deadPoints.length,
     });
   }
-}
-
-// Enhanced dead point creation with timestamp
-function createDeadPoint(x, y, radius, color) {
-  const deadPoint = {
-    x,
-    y,
-    radius,
-    color,
-    createdAt: Date.now(),
-  };
-
-  gameState.deadPoints.push(deadPoint);
-  performanceMetrics.deadPointsCreated++;
-  updatePeakMetrics();
-
-  return deadPoint;
 }
 
 function updateBots() {
@@ -2547,11 +2521,6 @@ function updateBots() {
     // Relaxed boundary collision detection - give bots small buffer to prevent excessive deaths
     if (newX < minX || newX > maxX || newY < minY || newY > maxY) {
       // Bot dies from boundary collision - relaxed enforcement with buffer
-      // console.log(
-      //   `Bot ${player.id} died at boundary: position (${newX.toFixed(
-      //     2
-      //   )}, ${newY.toFixed(2)}), bounds: x[${minX}-${maxX}], y[${minY}-${maxY}]`
-      // );
       handleBotDeath(player);
       return;
     }
@@ -2678,9 +2647,6 @@ function updateBots() {
         );
         // food.color = getFoodColorByType(newtype);
         food.type = newtype;
-
-        // console.log(`🍎 Bot ${player.id} ate food ${food.id}: regenerated from (${oldPos.x.toFixed(2)}, ${oldPos.y.toFixed(2)}) to (${food.x.toFixed(2)}, ${food.y.toFixed(2)})`);
-
         // Broadcast food regeneration to all players
         io.emit("foodRegenerated", food);
 
@@ -2723,9 +2689,6 @@ function updateBots() {
             1,
             Math.floor(pointValue / pointSegment)
           );
-          // console.log(
-          //   `🤖 Bot ${player.id} eating dead point ${deadPointType}: ${pointValue} points = ${segmentsToAdd} segments`
-          // );
 
           if (player.points.length > 0) {
             const tail = player.points[player.points.length - 1];
@@ -2764,13 +2727,6 @@ function updateBots() {
           break; // Only eat one dead point per update cycle
         } else {
           // Dead point is protected due to age
-          // console.log(
-          //   `🛡️ Bot ${
-          //     player.id
-          //   } attempted to eat protected dead point (age: ${Math.round(
-          //     age / 1000
-          //   )}s < ${CLEANUP_INTERVAL / 1000}s)`
-          // );
         }
       }
     }
@@ -2779,12 +2735,6 @@ function updateBots() {
 
 // Initialize game
 initializeFoods();
-
-// Spawn initial bots for testing
-// setTimeout(() => {
-//   console.log("🤖 Spawning initial bots for game testing...");
-//   spawnBots(5);
-// }, 1000);
 
 io.on("connection", (socket) => {
   // console.log("Player connected:", socket.id);
@@ -2971,12 +2921,6 @@ io.on("connection", (socket) => {
         playerY,
         Date.now()
       );
-
-      // console.log(
-      //   `🔍 Viewport updated for ${playerId}: (${x?.toFixed(1) || "N/A"}, ${
-      //     y?.toFixed(1) || "N/A"
-      //   }) ${width?.toFixed(1) || "N/A"}x${height?.toFixed(1) || "N/A"}`
-      // );
     }
   });
 
@@ -3010,8 +2954,6 @@ io.on("connection", (socket) => {
 
       player.score += pointValue;
       performanceMetrics.foodEaten++;
-
-      // Score persistence now handled client-side
 
       // Update spatial partitioning after food regeneration
       spatialAgent.updateObject(food.id, food.x, food.y, food);

@@ -1,0 +1,42 @@
+version: "3.8"
+
+services:
+  snake-zone-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: snake-zone-server
+    restart: unless-stopped
+    ports:
+      - "9000:9000"
+    environment:
+      - NODE_ENV=production
+      - PORT=9000
+    volumes:
+      # Mount logs directory for persistence
+      - ./logs:/app/logs
+    networks:
+      - snake-zone-network
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "require('http').get('http://localhost:9000/health', (res) => { process.exit(res.statusCode === 200 ? 0 : 1) })",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    # Resource limits
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  snake-zone-network:
+    driver: bridge
