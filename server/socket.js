@@ -4,6 +4,7 @@ const msgpackrParser = require("./utils/sgpackr-parser-server-native");
 const initSocket = (server) => {
   const io = socketIo(server, {
     parser: msgpackrParser,
+    path: "/api/snake/ws",
     cors: {
       origin: "*",
       methods: ["GET", "POST"],
@@ -48,8 +49,11 @@ const initSocket = (server) => {
     return { valid: true, token };
   }
 
+  // Create namespace for snake game
+  const snakeNamespace = io.of("/snake");
+
   // Socket authentication middleware
-  io.use((socket, next) => {
+  snakeNamespace.use((socket, next) => {
     const token = socket.handshake.auth.token;
     const userData = socket.handshake.auth.userData;
 
@@ -90,7 +94,7 @@ const initSocket = (server) => {
 
     next(); // Always allow connection, but track auth status
   });
-  return io;
+  return snakeNamespace;
 };
 
 module.exports = initSocket;
